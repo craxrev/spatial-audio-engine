@@ -3,5 +3,7 @@
 
 pub mod consts;
 pub mod coord;
+pub mod distance;
 pub mod math;
 pub mod ramp;
+pub mod sh;
