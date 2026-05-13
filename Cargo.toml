@@ -1,0 +1,15 @@
+[workspace]
+members = [
+    "crates/engine",
+    "crates/vst",
+    "crates/cli",
+    "crates/cpal-demo",
+]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace.dependencies]
