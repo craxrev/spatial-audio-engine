@@ -3,7 +3,9 @@
 //! externalizer (M8), and the rest of the §12 pipeline land in
 //! later milestones; M3 stops at the encoded ambi bus.
 
-use crate::consts::{BLOCK_SIZE, NUM_AMBI, SH_W_NORM};
+use crate::consts::{BLOCK_SIZE, NUM_AMBI, OUTPUT_CHANNELS, SH_W_NORM};
+use crate::decoder::HrtfDecoder;
+use crate::hrtf::Hrtf;
 use crate::math::{Quat, Vec3};
 use crate::sh::sh_basis_n3d_into;
 use crate::source::Source;
@@ -25,8 +27,11 @@ pub struct Engine {
     pub listener: Listener,
     pub sources: Vec<Source>,
     /// 16-channel ambisonic accumulator, written by `process_block`.
-    /// Consumed by the HRTF decoder starting M4.
     pub ambi_bus: Vec<[f32; BLOCK_SIZE]>,
+    /// Binaural stereo output of the main HRTF decoder (§8).
+    /// Stays zero when no HRTF is loaded.
+    pub stereo_out: [[f32; BLOCK_SIZE]; OUTPUT_CHANNELS],
+    decoder: Option<HrtfDecoder>,
 }
 
 impl Engine {
@@ -36,7 +41,15 @@ impl Engine {
             listener: Listener::default(),
             sources: (0..num_sources).map(|_| Source::default()).collect(),
             ambi_bus: vec![[0.0; BLOCK_SIZE]; NUM_AMBI],
+            stereo_out: [[0.0; BLOCK_SIZE]; OUTPUT_CHANNELS],
+            decoder: None,
         }
+    }
+
+    /// Install the main HRTF decoder (§8). Until called, `stereo_out`
+    /// stays zero. Replaces any previously installed HRTF.
+    pub fn load_main_hrtf(&mut self, hrtf: &Hrtf) {
+        self.decoder = Some(HrtfDecoder::new(hrtf));
     }
 
     pub fn set_listener_position(&mut self, x: f32, y: f32, z: f32) {
@@ -84,6 +97,8 @@ impl Engine {
     /// `inputs[i]` is the mono input for source `i` for this block.
     /// Inactive sources and any indices past `inputs.len()` are
     /// skipped. The ambi bus is zeroed at the start of each call.
+    /// If a main HRTF is loaded, `stereo_out` carries the binaural
+    /// decode at end of block; otherwise it is cleared.
     pub fn process_block(&mut self, inputs: &[[f32; BLOCK_SIZE]]) {
         for ch in &mut self.ambi_bus {
             ch.fill(0.0);
@@ -93,6 +108,13 @@ impl Engine {
                 continue;
             }
             process_source(src, &self.listener, &inputs[i], &mut self.ambi_bus);
+        }
+        if let Some(decoder) = self.decoder.as_mut() {
+            decoder.process(&self.ambi_bus, &mut self.stereo_out);
+        } else {
+            for ch in &mut self.stereo_out {
+                ch.fill(0.0);
+            }
         }
     }
 }
@@ -140,7 +162,7 @@ fn process_source(
 }
 
 /// §5 SH-encoder wrapper without the curve override (M3 uses the
-/// `1/max(r, 0.1)` fallback). `rel` is in the listener's local frame.
+/// `1/max(r, 0.1)` fallback). `rel` is in the listener-local frame.
 fn compute_sh_gains(rel: Vec3, out: &mut [f32; NUM_AMBI]) {
     let r = rel.length();
     let (unit, dist_atten) = if r > 0.0 {
