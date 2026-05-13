@@ -42,37 +42,27 @@ fn stereo_output_is_nonzero_after_decode() {
 }
 
 #[test]
-#[ignore = "ear-ordering / SH-axis convention of bundled HRTF under investigation — see development notes"]
 fn left_native_source_lights_left_ear() {
-    // native +Y = listener's left. Per §13 default convention,
-    // ear 0 = left. So source at +Y should produce L > R.
-    // Empirically the bundle gives L=2.33, R=19.37 — opposite sign.
+    // native +Y = listener's left → ear 0 (left) louder.
     let mut e = build_engine_with_source_at(0.0, 5.0, 0.0);
     settle(&mut e, &dc_input(), 8);
     let l = energy(&e.stereo_out[0]);
     let r = energy(&e.stereo_out[1]);
-    assert!(
-        l > r,
-        "+Y source should be louder in ear 0 (presumed left): L={l}, R={r}"
-    );
+    assert!(l > r, "+Y source should be louder in left ear: L={l}, R={r}");
 }
 
 #[test]
-#[ignore = "ear-ordering / SH-axis convention of bundled HRTF under investigation"]
 fn right_native_source_lights_right_ear() {
     let mut e = build_engine_with_source_at(0.0, -5.0, 0.0);
     settle(&mut e, &dc_input(), 8);
     let l = energy(&e.stereo_out[0]);
     let r = energy(&e.stereo_out[1]);
-    assert!(
-        r > l,
-        "−Y source should be louder in ear 1 (presumed right): L={l}, R={r}"
-    );
+    assert!(r > l, "−Y source should be louder in right ear: L={l}, R={r}");
 }
 
 #[test]
-#[ignore = "front source shows ~42x L/R asymmetry — likely SH axis convention mismatch"]
 fn front_source_is_roughly_symmetric() {
+    // Median-plane source: L and R should be within ~3 dB.
     let mut e = build_engine_with_source_at(5.0, 0.0, 0.0);
     settle(&mut e, &dc_input(), 8);
     let l = energy(&e.stereo_out[0]);
@@ -82,6 +72,39 @@ fn front_source_is_roughly_symmetric() {
         ratio < 2.0,
         "frontal source should be near-symmetric: L={l}, R={r}, ratio={ratio}"
     );
+}
+
+/// Diagnostic: print the first taps and peak of the W→L and W→R IRs.
+/// For a typical HRTF, W-channel IRs should be near-identical (both
+/// ears see roughly the same omni response).
+#[test]
+#[ignore]
+fn w_filter_diagnostic() {
+    let hrtf = Hrtf::load_from_bytes(HRTF_BYTES).unwrap();
+    for ear in 0..2 {
+        let ir = hrtf.ir(0, ear);
+        let peak_idx = ir
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.abs().partial_cmp(&b.1.abs()).unwrap())
+            .map(|(i, _)| i)
+            .unwrap();
+        println!(
+            "\nW → ear {ear} IR: peak at tap {peak_idx} = {:+.4}",
+            ir[peak_idx]
+        );
+        for (label, range) in [("0..32", 0..32usize), ("96..128", 96..128)] {
+            print!("  taps {label}:");
+            for (i, v) in ir[range.clone()].iter().enumerate() {
+                if i % 8 == 0 {
+                    println!();
+                    print!("   ");
+                }
+                print!(" {v:+8.4}");
+            }
+            println!();
+        }
+    }
 }
 
 /// Diagnostic: dump per-filter DC gain and energy for each

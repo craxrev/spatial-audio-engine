@@ -1,25 +1,40 @@
-//! Bundled HRTF coefficient loader (§13). Reads the 16,384-byte
-//! `hrtf_decoder_native.bin` (32 filters × 128 floats halfcomplex)
-//! and recovers each cell's 128-tap time-domain IR via inverse FFT.
+//! Bundled HRTF coefficient loader (§13).
 //!
-//! Cell layout (§13): `i = ambi_channel · OUTPUT_CHANNELS + ear`,
-//! `ear ∈ {0=left, 1=right}` (per §13 note, ear ordering must be
-//! confirmed empirically — see the integration tests).
+//! Reads the 16,384-byte `hrtf_decoder_native.bin` (32 cells of 128
+//! `float32` each). Two spec discrepancies discovered empirically
+//! and via consultation with the research archive:
 //!
-//! Halfcomplex packing (§8.1): 1 real DC, 1 real Nyquist, then 63
-//! complex bins as `(re, im)` pairs → 128 floats per cell.
-
-use realfft::RealFftPlanner;
-use realfft::num_complex::Complex;
+//! 1. **The .bin stores time-domain IRs directly**, not the
+//!    frequency-domain halfcomplex layout described by §8.1.
+//!    Inspecting the raw 128 floats per cell shows a clean HRIR
+//!    envelope (smooth onset, peak ~tap 70, decay). Parsing as
+//!    halfcomplex + inverse FFT produces full-amplitude noise.
+//!    The freq-domain form described by §10.4 is what the engine's
+//!    `prepare()` step builds at load time *from* these time-domain
+//!    coefficients, not the format on disk.
+//!
+//! 2. **Cell layout in the .bin is ear-major**, contrary to §13's
+//!    `i = ambi · OUTPUT_CHANNELS + ear`. The reference's
+//!    `ZeroDelayEngine` indexes cells as `output_perm[ear] + ambi`
+//!    with `output_perm = [0, NUM_AMBI]`. Empirically the first
+//!    block of 16 slots is the **right** ear (verified by feeding
+//!    an native-left source through and confirming higher energy
+//!    in the second block):
+//!    slots 0..15  = (ambi 0..15, RIGHT ear),
+//!    slots 16..31 = (ambi 0..15, LEFT ear).
+//!
+//! Each loaded IR is multiplied by `LOAD_GAIN = 1.585` to match the
+//! reference engine's per-filter level calibration (32 sequential
+//! `scale_block(slot[k], …, 1.585, 128)` calls at the equivalent of
+//! `engine_create`).
 
 use crate::consts::{NUM_AMBI, OUTPUT_CHANNELS};
 
-const FFT_SIZE: usize = 128;
-const FILTER_FLOATS: usize = 128;
-const FILTER_BYTES: usize = FILTER_FLOATS * 4;
+const IR_LEN: usize = 128;
+const FILTER_BYTES: usize = IR_LEN * 4;
 const N_CELLS: usize = NUM_AMBI * OUTPUT_CHANNELS;
 const TOTAL_BYTES: usize = N_CELLS * FILTER_BYTES;
-const N_BINS: usize = FFT_SIZE / 2 + 1; // 65 unique bins
+const LOAD_GAIN: f32 = 1.585;
 
 #[derive(Debug)]
 pub enum HrtfLoadError {
@@ -28,9 +43,10 @@ pub enum HrtfLoadError {
 
 #[derive(Clone, Debug)]
 pub struct Hrtf {
-    /// 32 time-domain IRs of `FFT_SIZE` taps each. Indexed
-    /// `ambi · OUTPUT_CHANNELS + ear`.
-    pub irs: Vec<[f32; FFT_SIZE]>,
+    /// 32 time-domain IRs of `IR_LEN` taps each, stored in file
+    /// order (right-ear block first, then left-ear block). Use
+    /// `ir()` to look up by `(ambi, ear)` in the L=0/R=1 convention.
+    pub irs: Vec<[f32; IR_LEN]>,
 }
 
 impl Hrtf {
@@ -41,49 +57,29 @@ impl Hrtf {
                 want: TOTAL_BYTES,
             });
         }
-        let mut planner = RealFftPlanner::<f32>::new();
-        let c2r = planner.plan_fft_inverse(FFT_SIZE);
         let mut irs = Vec::with_capacity(N_CELLS);
         for cell in 0..N_CELLS {
             let start = cell * FILTER_BYTES;
-            let floats = read_le_f32_block(&bytes[start..start + FILTER_BYTES]);
-            let mut spectrum = halfcomplex_to_bins(&floats);
-            let mut time = vec![0.0_f32; FFT_SIZE];
-            // realfft's c2r is unnormalized; per §10.4 the bundled
-            // file already has 1/N folded into the spectrum, so no
-            // additional scaling is needed here.
-            c2r.process(&mut spectrum, &mut time)
-                .expect("c2r length");
-            let mut arr = [0.0_f32; FFT_SIZE];
-            arr.copy_from_slice(&time);
+            let mut arr = [0.0_f32; IR_LEN];
+            for (i, chunk) in bytes[start..start + FILTER_BYTES]
+                .chunks_exact(4)
+                .enumerate()
+            {
+                let v = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+                arr[i] = v * LOAD_GAIN;
+            }
             irs.push(arr);
         }
         Ok(Self { irs })
     }
 
-    pub fn ir(&self, ambi: usize, ear: usize) -> &[f32; FFT_SIZE] {
-        &self.irs[ambi * OUTPUT_CHANNELS + ear]
+    /// Look up the IR for `(ambi, ear)` with caller-facing
+    /// `ear ∈ {0=left, 1=right}`. The file's right-ear block is
+    /// first, so the indices are flipped here.
+    pub fn ir(&self, ambi: usize, ear: usize) -> &[f32; IR_LEN] {
+        let file_ear = 1 - ear;
+        &self.irs[file_ear * NUM_AMBI + ambi]
     }
-}
-
-fn read_le_f32_block(bytes: &[u8]) -> [f32; FILTER_FLOATS] {
-    let mut out = [0.0_f32; FILTER_FLOATS];
-    for (i, chunk) in bytes.chunks_exact(4).enumerate() {
-        out[i] = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
-    }
-    out
-}
-
-fn halfcomplex_to_bins(floats: &[f32; FILTER_FLOATS]) -> Vec<Complex<f32>> {
-    let mut bins = vec![Complex::new(0.0, 0.0); N_BINS];
-    bins[0] = Complex::new(floats[0], 0.0); // DC
-    bins[FFT_SIZE / 2] = Complex::new(floats[1], 0.0); // Nyquist (bin 64)
-    for bin in 1..(FFT_SIZE / 2) {
-        let re = floats[2 + (bin - 1) * 2];
-        let im = floats[2 + (bin - 1) * 2 + 1];
-        bins[bin] = Complex::new(re, im);
-    }
-    bins
 }
 
 #[cfg(test)]
@@ -106,9 +102,6 @@ mod tests {
 
     #[test]
     fn irs_have_plausible_magnitudes() {
-        // HRTF impulse responses should have absolute values well below
-        // 1.0 — typically a few tenths at peak. This sanity-checks our
-        // halfcomplex parse + IFFT normalization.
         let h = Hrtf::load_from_bytes(BUNDLED).unwrap();
         for (i, ir) in h.irs.iter().enumerate() {
             let peak = ir.iter().fold(0.0_f32, |m, &v| m.max(v.abs()));
@@ -116,6 +109,20 @@ mod tests {
             assert!(peak < 10.0, "cell {i} peak {peak} too large");
             assert!(peak > 0.0, "cell {i} silent");
         }
+    }
+
+    #[test]
+    fn w_filter_is_near_symmetric() {
+        // W (ACN[0]) is omni; left and right ear filters should be
+        // very similar in energy and peak position.
+        let h = Hrtf::load_from_bytes(BUNDLED).unwrap();
+        let l_e: f32 = h.ir(0, 0).iter().map(|v| v * v).sum();
+        let r_e: f32 = h.ir(0, 1).iter().map(|v| v * v).sum();
+        let ratio = (l_e / r_e).max(r_e / l_e);
+        assert!(
+            ratio < 1.5,
+            "W filter L vs R energy: L={l_e}, R={r_e}, ratio={ratio}"
+        );
     }
 
     #[test]
