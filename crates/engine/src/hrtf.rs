@@ -1,8 +1,9 @@
 //! Bundled HRTF coefficient loader. Reads the 16,384-byte
 //! `hrtf_decoder_native.bin` per §13: 32 cells of 128 time-domain
-//! float32 taps, ear-major layout with `ear ∈ {0=right, 1=left}`
-//! on disk. Each cell is multiplied by `HRTF_LOAD_GAIN` (1.585) on
-//! load, matching the reference's per-cell calibration scalar.
+//! float32 taps, ear-major layout: slots 0..15 = left-ear filters,
+//! slots 16..31 = right-ear filters. Each cell is multiplied by
+//! `HRTF_LOAD_GAIN` (1.585) on load, matching the reference's
+//! per-cell calibration scalar.
 
 use crate::consts::{HRTF_LOAD_GAIN, NUM_AMBI, OUTPUT_CHANNELS};
 
@@ -19,7 +20,7 @@ pub enum HrtfLoadError {
 #[derive(Clone, Debug)]
 pub struct Hrtf {
     /// 32 time-domain IRs of `IR_LEN` taps each, stored in file
-    /// order (right-ear block first, then left-ear block). Use
+    /// order (left-ear block first, then right-ear block). Use
     /// `ir()` to look up by `(ambi, ear)` in the L=0/R=1 convention.
     pub irs: Vec<[f32; IR_LEN]>,
 }
@@ -49,11 +50,14 @@ impl Hrtf {
     }
 
     /// Look up the IR for `(ambi, ear)` with caller-facing
-    /// `ear ∈ {0=left, 1=right}`. The file's right-ear block is
-    /// first, so the indices are flipped here.
+    /// `ear ∈ {0=left, 1=right}`. The file layout is ear-major:
+    /// slots 0..15 are the left-ear filters, 16..31 the right-ear
+    /// filters. (An earlier interpretation swapped these based on
+    /// DC-only analysis and produced reversed L/R for broadband
+    /// musical content — the bundle's DC behaviour is misleading
+    /// vs its broadband total energy.)
     pub fn ir(&self, ambi: usize, ear: usize) -> &[f32; IR_LEN] {
-        let file_ear = 1 - ear;
-        &self.irs[file_ear * NUM_AMBI + ambi]
+        &self.irs[ear * NUM_AMBI + ambi]
     }
 }
 
