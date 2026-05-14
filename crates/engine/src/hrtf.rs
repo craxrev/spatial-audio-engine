@@ -1,40 +1,15 @@
-//! Bundled HRTF coefficient loader (§13).
-//!
-//! Reads the 16,384-byte `hrtf_decoder_native.bin` (32 cells of 128
-//! `float32` each). Two spec discrepancies discovered empirically
-//! and via consultation with the research archive:
-//!
-//! 1. **The .bin stores time-domain IRs directly**, not the
-//!    frequency-domain halfcomplex layout described by §8.1.
-//!    Inspecting the raw 128 floats per cell shows a clean HRIR
-//!    envelope (smooth onset, peak ~tap 70, decay). Parsing as
-//!    halfcomplex + inverse FFT produces full-amplitude noise.
-//!    The freq-domain form described by §10.4 is what the engine's
-//!    `prepare()` step builds at load time *from* these time-domain
-//!    coefficients, not the format on disk.
-//!
-//! 2. **Cell layout in the .bin is ear-major**, contrary to §13's
-//!    `i = ambi · OUTPUT_CHANNELS + ear`. The reference's
-//!    `ZeroDelayEngine` indexes cells as `output_perm[ear] + ambi`
-//!    with `output_perm = [0, NUM_AMBI]`. Empirically the first
-//!    block of 16 slots is the **right** ear (verified by feeding
-//!    an native-left source through and confirming higher energy
-//!    in the second block):
-//!    slots 0..15  = (ambi 0..15, RIGHT ear),
-//!    slots 16..31 = (ambi 0..15, LEFT ear).
-//!
-//! Each loaded IR is multiplied by `LOAD_GAIN = 1.585` to match the
-//! reference engine's per-filter level calibration (32 sequential
-//! `scale_block(slot[k], …, 1.585, 128)` calls at the equivalent of
-//! `engine_create`).
+//! Bundled HRTF coefficient loader. Reads the 16,384-byte
+//! `hrtf_decoder_native.bin` per §13: 32 cells of 128 time-domain
+//! float32 taps, ear-major layout with `ear ∈ {0=right, 1=left}`
+//! on disk. Each cell is multiplied by `HRTF_LOAD_GAIN` (1.585) on
+//! load, matching the reference's per-cell calibration scalar.
 
-use crate::consts::{NUM_AMBI, OUTPUT_CHANNELS};
+use crate::consts::{HRTF_LOAD_GAIN, NUM_AMBI, OUTPUT_CHANNELS};
 
 const IR_LEN: usize = 128;
 const FILTER_BYTES: usize = IR_LEN * 4;
 const N_CELLS: usize = NUM_AMBI * OUTPUT_CHANNELS;
 const TOTAL_BYTES: usize = N_CELLS * FILTER_BYTES;
-const LOAD_GAIN: f32 = 1.585;
 
 #[derive(Debug)]
 pub enum HrtfLoadError {
@@ -66,7 +41,7 @@ impl Hrtf {
                 .enumerate()
             {
                 let v = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
-                arr[i] = v * LOAD_GAIN;
+                arr[i] = v * HRTF_LOAD_GAIN;
             }
             irs.push(arr);
         }

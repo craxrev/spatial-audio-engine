@@ -27,6 +27,10 @@ pub const DEFAULT_REVERB_HIGH_HZ: f32 = 3500.0;
 pub const DEFAULT_REVERB_HIGH_DB: f32 = -20.0;
 pub const DEFAULT_DIFFUSION_COEF: f32 = 0.69;
 
+/// Per-cell calibration multiplier applied at HRTF load time, per
+/// §13. IEEE-754 single `0x3FCAE148 = 1.5850000381`.
+pub const HRTF_LOAD_GAIN: f32 = 1.585;
+
 pub const DIFFUSER_DELAY_SECONDS: [f32; 8] = [
     0.0203, 0.0244, 0.0316, 0.0273, 0.0229, 0.0293, 0.0135, 0.0191,
 ];
