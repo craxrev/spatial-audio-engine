@@ -15,6 +15,9 @@ pub const OCCLUSION_FREQ_BASE: f32 = 1100.0;
 pub const OCCLUSION_FREQ_SCALE: f32 = 20.0;
 pub const OCCLUSION_FC_MAX_FACTOR: f32 = 0.425;
 
+/// Reference-binary literal `0x410A7FAC` — ~0.34% above the math
+/// identity `20/ln(10) = 8.68589`. Kept verbatim for parity with
+/// native's deliberate behaviour. See §4.
 pub const DB_TO_LINEAR_DIVISOR: f32 = 8.65617;
 
 // 2 · sqrt(pi)
@@ -58,12 +61,9 @@ mod tests {
     }
 
     #[test]
-    fn db_to_linear_divisor_is_spec_literal() {
-        // §4 gives 8.65617 (annotated "≈ 20 / ln(10)"). The literal
-        // is ~0.34% off from the exact value (8.6859); we keep the
-        // spec's number verbatim. Errors at extreme −80 dB reach ~3%
-        // but the constant is used in audible ranges where divergence
-        // is well under 1 dB. See note in development notes.
+    fn db_to_linear_divisor_is_reference_literal() {
+        // Verified against both v0.4 and v0.5 wasms — the binary
+        // really uses 8.65617f (0x410A7FAC), not 20/ln(10).
         assert_eq!(DB_TO_LINEAR_DIVISOR, 8.65617);
     }
 }
