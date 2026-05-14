@@ -84,39 +84,34 @@ SpatialAudioProcessor::makeParameterLayout()
 
     layout.add(std::make_unique<P>(juce::ParameterID{"distance",   1}, "Distance",
                                     R{0.0f, 50.0f, 0.001f},  5.0f,
-                                    Attrs().withLabel("m").withStringFromValueFunction(fmtMeters)));
+                                    Attrs().withStringFromValueFunction(fmtMeters)));
     layout.add(std::make_unique<P>(juce::ParameterID{"azimuth",    1}, "Azimuth",
                                     R{-180.0f, 180.0f, 0.1f}, 0.0f,
-                                    Attrs().withLabel(juce::String::fromUTF8("\xc2\xb0"))
-                                           .withStringFromValueFunction(fmtAzim)));
+                                    Attrs().withStringFromValueFunction(fmtAzim)));
     layout.add(std::make_unique<P>(juce::ParameterID{"elevation",  1}, "Elevation",
                                     R{-90.0f, 90.0f, 0.1f},   0.0f,
-                                    Attrs().withLabel(juce::String::fromUTF8("\xc2\xb0"))
-                                           .withStringFromValueFunction(fmtElev)));
+                                    Attrs().withStringFromValueFunction(fmtElev)));
     layout.add(std::make_unique<P>(juce::ParameterID{"gain_db",    1}, "Gain",
                                     R{-80.0f, 12.0f, 0.1f},   0.0f,
-                                    Attrs().withLabel("dB").withStringFromValueFunction(fmtDb)));
+                                    Attrs().withStringFromValueFunction(fmtDb)));
     layout.add(std::make_unique<P>(juce::ParameterID{"listener_x", 1}, "Listener X",
                                     R{-50.0f, 50.0f, 0.01f},  0.0f,
-                                    Attrs().withLabel("m").withStringFromValueFunction(fmtMeters)));
+                                    Attrs().withStringFromValueFunction(fmtMeters)));
     layout.add(std::make_unique<P>(juce::ParameterID{"listener_y", 1}, "Listener Y",
                                     R{-50.0f, 50.0f, 0.01f},  0.0f,
-                                    Attrs().withLabel("m").withStringFromValueFunction(fmtMeters)));
+                                    Attrs().withStringFromValueFunction(fmtMeters)));
     layout.add(std::make_unique<P>(juce::ParameterID{"listener_z", 1}, "Listener Z",
                                     R{-50.0f, 50.0f, 0.01f},  0.0f,
-                                    Attrs().withLabel("m").withStringFromValueFunction(fmtMeters)));
+                                    Attrs().withStringFromValueFunction(fmtMeters)));
     layout.add(std::make_unique<P>(juce::ParameterID{"yaw",        1}, "Yaw",
                                     R{-180.0f, 180.0f, 0.1f}, 0.0f,
-                                    Attrs().withLabel(juce::String::fromUTF8("\xc2\xb0"))
-                                           .withStringFromValueFunction(fmtDeg)));
+                                    Attrs().withStringFromValueFunction(fmtDeg)));
     layout.add(std::make_unique<P>(juce::ParameterID{"pitch",      1}, "Pitch",
                                     R{-90.0f, 90.0f, 0.1f},   0.0f,
-                                    Attrs().withLabel(juce::String::fromUTF8("\xc2\xb0"))
-                                           .withStringFromValueFunction(fmtDeg)));
+                                    Attrs().withStringFromValueFunction(fmtDeg)));
     layout.add(std::make_unique<P>(juce::ParameterID{"roll",       1}, "Roll",
                                     R{-180.0f, 180.0f, 0.1f}, 0.0f,
-                                    Attrs().withLabel(juce::String::fromUTF8("\xc2\xb0"))
-                                           .withStringFromValueFunction(fmtDeg)));
+                                    Attrs().withStringFromValueFunction(fmtDeg)));
 
     return layout;
 }
