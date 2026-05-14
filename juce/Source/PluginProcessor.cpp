@@ -37,25 +37,86 @@ inline void eulerToQuat(float yawDeg, float pitchDeg, float rollDeg,
     y = cr * sp * cy + sr * cp * sy;
     z = cr * cp * sy - sr * sp * cy;
 }
+// Short cardinal-direction hint for an azimuth in degrees.
+inline const char* azimuthCardinal(float deg)
+{
+    if (deg >= -22.5f  && deg <=  22.5f)  return "front";
+    if (deg >   22.5f  && deg <   67.5f)  return "front-left";
+    if (deg >=  67.5f  && deg <= 112.5f)  return "left";
+    if (deg >  112.5f  && deg <  157.5f)  return "back-left";
+    if (deg >= 157.5f  || deg <= -157.5f) return "back";
+    if (deg >  -157.5f && deg <  -112.5f) return "back-right";
+    if (deg >= -112.5f && deg <=  -67.5f) return "right";
+    return "front-right"; // -67.5 .. -22.5
+}
+
+inline const char* elevationCardinal(float deg)
+{
+    if (deg >=  10.0f) return "up";
+    if (deg <= -10.0f) return "down";
+    return "horizon";
+}
 } // namespace
 
 juce::AudioProcessorValueTreeState::ParameterLayout
 SpatialAudioProcessor::makeParameterLayout()
 {
-    using P = juce::AudioParameterFloat;
-    using R = juce::NormalisableRange<float>;
+    using P     = juce::AudioParameterFloat;
+    using Attrs = juce::AudioParameterFloatAttributes;
+    using R     = juce::NormalisableRange<float>;
     juce::AudioProcessorValueTreeState::ParameterLayout layout;
 
-    layout.add(std::make_unique<P>(juce::ParameterID{"distance",    1}, "Distance",   R{0.0f, 50.0f, 0.001f},  5.0f));
-    layout.add(std::make_unique<P>(juce::ParameterID{"azimuth",     1}, "Azimuth",    R{-180.0f, 180.0f, 0.1f}, 0.0f));
-    layout.add(std::make_unique<P>(juce::ParameterID{"elevation",   1}, "Elevation",  R{-90.0f, 90.0f, 0.1f},   0.0f));
-    layout.add(std::make_unique<P>(juce::ParameterID{"gain_db",     1}, "Gain (dB)",  R{-80.0f, 12.0f, 0.1f},   0.0f));
-    layout.add(std::make_unique<P>(juce::ParameterID{"listener_x",  1}, "Listener X", R{-50.0f, 50.0f, 0.01f},  0.0f));
-    layout.add(std::make_unique<P>(juce::ParameterID{"listener_y",  1}, "Listener Y", R{-50.0f, 50.0f, 0.01f},  0.0f));
-    layout.add(std::make_unique<P>(juce::ParameterID{"listener_z",  1}, "Listener Z", R{-50.0f, 50.0f, 0.01f},  0.0f));
-    layout.add(std::make_unique<P>(juce::ParameterID{"yaw",         1}, "Yaw",        R{-180.0f, 180.0f, 0.1f}, 0.0f));
-    layout.add(std::make_unique<P>(juce::ParameterID{"pitch",       1}, "Pitch",      R{-90.0f, 90.0f, 0.1f},   0.0f));
-    layout.add(std::make_unique<P>(juce::ParameterID{"roll",        1}, "Roll",       R{-180.0f, 180.0f, 0.1f}, 0.0f));
+    auto fmtMeters = [](float v, int) { return juce::String(v, 2) + " m"; };
+    auto fmtDb     = [](float v, int) {
+        return v <= -79.9f ? juce::String("-inf dB") : juce::String(v, 1) + " dB";
+    };
+    auto fmtAzim = [](float v, int) {
+        return juce::String(v, 1) + juce::String::fromUTF8("\xc2\xb0 (")
+             + azimuthCardinal(v) + ")";
+    };
+    auto fmtElev = [](float v, int) {
+        return juce::String(v, 1) + juce::String::fromUTF8("\xc2\xb0 (")
+             + elevationCardinal(v) + ")";
+    };
+    auto fmtDeg = [](float v, int) {
+        return juce::String(v, 1) + juce::String::fromUTF8("\xc2\xb0");
+    };
+
+    layout.add(std::make_unique<P>(juce::ParameterID{"distance",   1}, "Distance",
+                                    R{0.0f, 50.0f, 0.001f},  5.0f,
+                                    Attrs().withLabel("m").withStringFromValueFunction(fmtMeters)));
+    layout.add(std::make_unique<P>(juce::ParameterID{"azimuth",    1}, "Azimuth",
+                                    R{-180.0f, 180.0f, 0.1f}, 0.0f,
+                                    Attrs().withLabel(juce::String::fromUTF8("\xc2\xb0"))
+                                           .withStringFromValueFunction(fmtAzim)));
+    layout.add(std::make_unique<P>(juce::ParameterID{"elevation",  1}, "Elevation",
+                                    R{-90.0f, 90.0f, 0.1f},   0.0f,
+                                    Attrs().withLabel(juce::String::fromUTF8("\xc2\xb0"))
+                                           .withStringFromValueFunction(fmtElev)));
+    layout.add(std::make_unique<P>(juce::ParameterID{"gain_db",    1}, "Gain",
+                                    R{-80.0f, 12.0f, 0.1f},   0.0f,
+                                    Attrs().withLabel("dB").withStringFromValueFunction(fmtDb)));
+    layout.add(std::make_unique<P>(juce::ParameterID{"listener_x", 1}, "Listener X",
+                                    R{-50.0f, 50.0f, 0.01f},  0.0f,
+                                    Attrs().withLabel("m").withStringFromValueFunction(fmtMeters)));
+    layout.add(std::make_unique<P>(juce::ParameterID{"listener_y", 1}, "Listener Y",
+                                    R{-50.0f, 50.0f, 0.01f},  0.0f,
+                                    Attrs().withLabel("m").withStringFromValueFunction(fmtMeters)));
+    layout.add(std::make_unique<P>(juce::ParameterID{"listener_z", 1}, "Listener Z",
+                                    R{-50.0f, 50.0f, 0.01f},  0.0f,
+                                    Attrs().withLabel("m").withStringFromValueFunction(fmtMeters)));
+    layout.add(std::make_unique<P>(juce::ParameterID{"yaw",        1}, "Yaw",
+                                    R{-180.0f, 180.0f, 0.1f}, 0.0f,
+                                    Attrs().withLabel(juce::String::fromUTF8("\xc2\xb0"))
+                                           .withStringFromValueFunction(fmtDeg)));
+    layout.add(std::make_unique<P>(juce::ParameterID{"pitch",      1}, "Pitch",
+                                    R{-90.0f, 90.0f, 0.1f},   0.0f,
+                                    Attrs().withLabel(juce::String::fromUTF8("\xc2\xb0"))
+                                           .withStringFromValueFunction(fmtDeg)));
+    layout.add(std::make_unique<P>(juce::ParameterID{"roll",       1}, "Roll",
+                                    R{-180.0f, 180.0f, 0.1f}, 0.0f,
+                                    Attrs().withLabel(juce::String::fromUTF8("\xc2\xb0"))
+                                           .withStringFromValueFunction(fmtDeg)));
 
     return layout;
 }
