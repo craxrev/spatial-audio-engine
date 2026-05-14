@@ -151,6 +151,7 @@ SpatialAudioProcessor::~SpatialAudioProcessor()
 
 void SpatialAudioProcessor::prepareToPlay(double sampleRate, int /*samplesPerBlock*/)
 {
+    currentSampleRate_ = sampleRate;
     if (engine_ != nullptr)
     {
         engine_destroy(engine_);
@@ -234,6 +235,31 @@ void SpatialAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce:
 {
     juce::ScopedNoDenormals nd;
 
+    // Diagnostic: bypass engine entirely. Output mono-summed input
+    // audio to JUCE channel 0 ONLY (silence on channel 1). Whichever
+    // ear hears the music reveals where channel 0 physically lands.
+    if (diagOn_.load())
+    {
+        const int n     = buffer.getNumSamples();
+        const int chans = buffer.getNumChannels();
+        if (chans == 0) return;
+        const float* inL = buffer.getReadPointer(0);
+        const float* inR = chans > 1 ? buffer.getReadPointer(1) : nullptr;
+        // Compute mono into a scratch buffer first; output channels
+        // share memory with input channels.
+        std::vector<float> mono((size_t) n);
+        for (int i = 0; i < n; ++i)
+            mono[(size_t) i] = inR != nullptr ? 0.5f * (inL[i] + inR[i]) : inL[i];
+        float* outL = buffer.getWritePointer(0);
+        float* outR = chans > 1 ? buffer.getWritePointer(1) : nullptr;
+        for (int i = 0; i < n; ++i)
+        {
+            outL[i] = mono[(size_t) i];
+            if (outR != nullptr) outR[i] = 0.0f;
+        }
+        return;
+    }
+
     if (engine_ == nullptr || !hrtfLoaded_)
     {
         buffer.clear();
@@ -265,12 +291,27 @@ void SpatialAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce:
     // Pop n samples from the output ring into the host buffer.
     float* outL = buffer.getWritePointer(0);
     float* outR = buffer.getNumChannels() > 1 ? buffer.getWritePointer(1) : nullptr;
+    double sumSqL = 0.0, sumSqR = 0.0;
     for (int i = 0; i < n; ++i)
     {
-        outL[i] = outLRing_[(size_t) outRead_];
-        if (outR != nullptr) outR[i] = outRRing_[(size_t) outRead_];
+        const float vL = outLRing_[(size_t) outRead_];
+        const float vR = outRRing_[(size_t) outRead_];
+        outL[i] = vL;
+        if (outR != nullptr) outR[i] = vR;
+        sumSqL += (double) vL * vL;
+        sumSqR += (double) vR * vR;
         outRead_ = (outRead_ + 1) % RING_CAP;
     }
+    const float rmsL = (float) std::sqrt(sumSqL / juce::jmax(1, n));
+    const float rmsR = (float) std::sqrt(sumSqR / juce::jmax(1, n));
+    // Exponential smoother with a ~1 s time constant at the host
+    // block size. alpha = 1 - exp(-blockTime / tau).
+    const float blockTime = (float) n / (float) currentSampleRate_;
+    const float alpha = 1.0f - std::exp(-blockTime / 1.0f);
+    outRmsLState_ += alpha * (rmsL - outRmsLState_);
+    outRmsRState_ += alpha * (rmsR - outRmsRState_);
+    outRmsL_.store(outRmsLState_);
+    outRmsR_.store(outRmsRState_);
 }
 
 void SpatialAudioProcessor::getStateInformation(juce::MemoryBlock& dest)

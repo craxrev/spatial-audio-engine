@@ -42,6 +42,13 @@ public:
 
     juce::AudioProcessorValueTreeState apvts;
 
+    // Diagnostic toggle: while ON, every block emits a 1 kHz sine on
+    // JUCE channel 0 and silence on channel 1, bypassing the engine.
+    // Used to identify which physical ear receives channel 0 in the
+    // host/system audio chain.
+    void setLeftToneDiagnostic(bool on)  { diagOn_.store(on); }
+    bool isLeftToneDiagnosticOn() const  { return diagOn_.load(); }
+
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout makeParameterLayout();
 
@@ -73,6 +80,20 @@ private:
     std::atomic<float>* pYaw_       = nullptr;
     std::atomic<float>* pPitch_     = nullptr;
     std::atomic<float>* pRoll_      = nullptr;
+
+    std::atomic<bool>  diagOn_         { false };
+    double             currentSampleRate_ { 48000.0 };
+
+public:
+    // Slow-smoothed RMS of the buffer written to JUCE channels 0
+    // and 1. Updated each block; read by the editor at ~20 Hz.
+    // Time constant is ~1 second.
+    std::atomic<float> outRmsL_ { 0.0f };
+    std::atomic<float> outRmsR_ { 0.0f };
+
+private:
+    float outRmsLState_ { 0.0f };
+    float outRmsRState_ { 0.0f };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SpatialAudioProcessor)
 };
