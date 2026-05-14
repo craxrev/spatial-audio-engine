@@ -77,6 +77,8 @@ juce_add_binary_data(SpatialAudioEngineResources
 target_sources(SpatialAudioEngine PRIVATE
     Source/PluginProcessor.cpp
     Source/PluginProcessor.h
+    Source/PluginEditor.cpp
+    Source/PluginEditor.h
 )
 
 target_compile_definitions(SpatialAudioEngine PRIVATE
