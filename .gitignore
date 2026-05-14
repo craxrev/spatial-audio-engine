@@ -4,3 +4,5 @@
 .idea/
 .vscode/
 *.vst3/
+juce/build/
+juce/_deps/
