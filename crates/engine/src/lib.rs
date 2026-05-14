@@ -13,6 +13,9 @@ pub mod ramp;
 pub mod sh;
 pub mod source;
 
+#[cfg(feature = "c-api")]
+pub mod c_api;
+
 pub use engine::{Engine, Listener};
 pub use hrtf::Hrtf;
 pub use math::{Quat, Vec3};
