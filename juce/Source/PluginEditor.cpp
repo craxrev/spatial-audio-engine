@@ -96,6 +96,11 @@ public:
         g.setColour(juce::Colour(0xff1a2a55));
         g.drawEllipse(centre.x - 13.0f, centre.y - 13.0f, 26.0f, 26.0f, 1.5f);
         g.strokePath(nose, juce::PathStrokeType(1.5f));
+        g.setColour(juce::Colour(0xff8aa8ff));
+        g.setFont(juce::Font(juce::FontOptions(10.0f)));
+        g.drawText("YOU",
+                   juce::Rectangle<float>(centre.x - 30.0f, centre.y + 18.0f, 60.0f, 12.0f),
+                   juce::Justification::centred);
 
         // Source dot + line.
         const float dist = currentDistance();
@@ -109,12 +114,26 @@ public:
         g.fillEllipse(src.x - 8.0f, src.y - 8.0f, 16.0f, 16.0f);
         g.setColour(juce::Colour(0xff5a2410));
         g.drawEllipse(src.x - 8.0f, src.y - 8.0f, 16.0f, 16.0f, 1.5f);
+        g.setColour(juce::Colour(0xffffb88a));
+        g.setFont(juce::Font(juce::FontOptions(10.0f)));
+        // Place the label below the dot, unless it would clip the bottom
+        // of the view — then place it above instead.
+        const bool above = src.y > bounds.getBottom() - 22.0f;
+        const float labelY = above ? src.y - 22.0f : src.y + 10.0f;
+        g.drawText("SOURCE",
+                   juce::Rectangle<float>(src.x - 30.0f, labelY, 60.0f, 12.0f),
+                   juce::Justification::centred);
 
-        // Readout in the corner.
+        // Top-left readout.
         g.setColour(juce::Colour(0xff9a9a9a));
         g.setFont(juce::Font(juce::FontOptions(11.0f)));
-        auto info = juce::String::formatted("%.2f m   %.1f°", dist, az);
-        g.drawText(info, juce::Rectangle<int>(8, 8, 200, 14),
+        auto info = juce::String::formatted("source: %.2f m  %.1f°", dist, az);
+        g.drawText(info, juce::Rectangle<int>(8, 8, 240, 14),
+                   juce::Justification::topLeft);
+        g.setColour(juce::Colour(0xff666666));
+        g.setFont(juce::Font(juce::FontOptions(10.0f)));
+        g.drawText("drag the orange dot",
+                   juce::Rectangle<int>(8, 22, 200, 12),
                    juce::Justification::topLeft);
     }
 
