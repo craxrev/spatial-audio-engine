@@ -114,6 +114,38 @@ SpatialAudioProcessor::makeParameterLayout()
                                     R{-180.0f, 180.0f, 0.1f}, 0.0f,
                                     Attrs().withStringFromValueFunction(fmtDeg)));
 
+    auto fmtUnit  = [](float v, int) { return juce::String(v, 2); };
+    auto fmtGain  = [](float v, int) { return juce::String(v, 2) + "x"; };
+
+    layout.add(std::make_unique<P>(juce::ParameterID{"source_yaw",   1}, "Src Yaw",
+                                    R{-180.0f, 180.0f, 0.1f}, 0.0f,
+                                    Attrs().withStringFromValueFunction(fmtDeg)));
+    layout.add(std::make_unique<P>(juce::ParameterID{"source_pitch", 1}, "Src Pitch",
+                                    R{-90.0f, 90.0f, 0.1f},   0.0f,
+                                    Attrs().withStringFromValueFunction(fmtDeg)));
+    layout.add(std::make_unique<P>(juce::ParameterID{"source_roll",  1}, "Src Roll",
+                                    R{-180.0f, 180.0f, 0.1f}, 0.0f,
+                                    Attrs().withStringFromValueFunction(fmtDeg)));
+    layout.add(std::make_unique<P>(juce::ParameterID{"occlusion",    1}, "Occlusion",
+                                    R{0.0f, 1.0f, 0.001f},    0.0f,
+                                    Attrs().withStringFromValueFunction(fmtUnit)));
+    // Cone defaults: inner=0°, outer=360°, outerGain=1, outerLP=0 (cone off).
+    layout.add(std::make_unique<P>(juce::ParameterID{"dir_inner_deg",1}, "Dir Inner",
+                                    R{0.0f, 360.0f, 0.1f},    0.0f,
+                                    Attrs().withStringFromValueFunction(fmtDeg)));
+    layout.add(std::make_unique<P>(juce::ParameterID{"dir_outer_deg",1}, "Dir Outer",
+                                    R{0.0f, 360.0f, 0.1f},  360.0f,
+                                    Attrs().withStringFromValueFunction(fmtDeg)));
+    layout.add(std::make_unique<P>(juce::ParameterID{"dir_outer_gain",1}, "Dir Outer Gain",
+                                    R{0.0f, 1.0f, 0.001f},    1.0f,
+                                    Attrs().withStringFromValueFunction(fmtUnit)));
+    layout.add(std::make_unique<P>(juce::ParameterID{"dir_outer_lp", 1}, "Dir Outer LP",
+                                    R{0.0f, 1.0f, 0.001f},    0.0f,
+                                    Attrs().withStringFromValueFunction(fmtUnit)));
+    layout.add(std::make_unique<P>(juce::ParameterID{"direct_path_gain",1}, "Direct Path",
+                                    R{0.0f, 2.0f, 0.001f},    1.0f,
+                                    Attrs().withStringFromValueFunction(fmtGain)));
+
     return layout;
 }
 
@@ -136,6 +168,15 @@ SpatialAudioProcessor::SpatialAudioProcessor()
     pYaw_       = apvts.getRawParameterValue("yaw");
     pPitch_     = apvts.getRawParameterValue("pitch");
     pRoll_      = apvts.getRawParameterValue("roll");
+    pSrcYaw_    = apvts.getRawParameterValue("source_yaw");
+    pSrcPitch_  = apvts.getRawParameterValue("source_pitch");
+    pSrcRoll_   = apvts.getRawParameterValue("source_roll");
+    pOcclusion_ = apvts.getRawParameterValue("occlusion");
+    pDirInner_  = apvts.getRawParameterValue("dir_inner_deg");
+    pDirOuter_  = apvts.getRawParameterValue("dir_outer_deg");
+    pDirGain_   = apvts.getRawParameterValue("dir_outer_gain");
+    pDirLp_     = apvts.getRawParameterValue("dir_outer_lp");
+    pDpGain_    = apvts.getRawParameterValue("direct_path_gain");
 
     setLatencySamples(ENGINE_BLOCK);
 }
@@ -208,6 +249,20 @@ void SpatialAudioProcessor::applyParametersToEngine()
     float qw, qx, qy, qz;
     eulerToQuat(pYaw_->load(), pPitch_->load(), pRoll_->load(), qw, qx, qy, qz);
     engine_set_listener_rotation(engine_, qw, qx, qy, qz);
+
+    float sqw, sqx, sqy, sqz;
+    eulerToQuat(pSrcYaw_->load(), pSrcPitch_->load(), pSrcRoll_->load(),
+                sqw, sqx, sqy, sqz);
+    engine_set_source_rotation(engine_, 0, sqw, sqx, sqy, sqz);
+
+    engine_set_source_direct_path_gain(engine_, 0, pDpGain_->load());
+    engine_set_source_occlusion(engine_, 0, pOcclusion_->load());
+    engine_set_source_directivity(
+        engine_, 0,
+        juce::degreesToRadians(pDirInner_->load()),
+        juce::degreesToRadians(pDirOuter_->load()),
+        pDirGain_->load(),
+        pDirLp_->load());
 }
 
 void SpatialAudioProcessor::processOneEngineBlock()

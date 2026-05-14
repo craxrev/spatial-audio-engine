@@ -285,6 +285,22 @@ private:
 // SpatialAudioEditor — main view.
 // ---------------------------------------------------------------------------
 
+namespace
+{
+struct M6Spec { const char* id; const char* label; };
+constexpr std::array<M6Spec, 9> kM6Specs = {{
+    {"source_yaw",       "Src Yaw"},
+    {"source_pitch",     "Src Pitch"},
+    {"source_roll",      "Src Roll"},
+    {"occlusion",        "Occl"},
+    {"dir_inner_deg",    "Inner"},
+    {"dir_outer_deg",    "Outer"},
+    {"dir_outer_gain",   "Dir Gain"},
+    {"dir_outer_lp",     "Dir LP"},
+    {"direct_path_gain", "Direct"},
+}};
+} // namespace
+
 SpatialAudioEditor::SpatialAudioEditor(SpatialAudioProcessor& p)
     : AudioProcessorEditor(p), proc_(p)
 {
@@ -303,11 +319,30 @@ SpatialAudioEditor::SpatialAudioEditor(SpatialAudioProcessor& p)
     addAndMakeVisible(gainSlider_);
     gainAttachment_ = std::make_unique<SliderAttachment>(p.apvts, "gain_db", gainSlider_);
 
+    for (int i = 0; i < kM6Count; ++i)
+    {
+        auto& s = m6Sliders_[(size_t) i];
+        s.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
+        s.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 60, 14);
+        s.setColour(juce::Slider::textBoxOutlineColourId, juce::Colour(0x00000000));
+        addAndMakeVisible(s);
+
+        auto& lbl = m6Labels_[(size_t) i];
+        lbl.setText(kM6Specs[(size_t) i].label, juce::dontSendNotification);
+        lbl.setJustificationType(juce::Justification::centred);
+        lbl.setColour(juce::Label::textColourId, juce::Colour(0xff9a9a9a));
+        lbl.setFont(juce::Font(juce::FontOptions(10.0f)));
+        addAndMakeVisible(lbl);
+
+        m6Attach_[(size_t) i] =
+            std::make_unique<SliderAttachment>(p.apvts, kM6Specs[(size_t) i].id, s);
+    }
+
     resetButton_.setTooltip("Reset all parameters to defaults");
     resetButton_.onClick = [this] { resetAllParams(); };
     addAndMakeVisible(resetButton_);
 
-    setSize(460, 460);
+    setSize(540, 540);
 }
 
 void SpatialAudioEditor::resetAllParams()
@@ -316,6 +351,11 @@ void SpatialAudioEditor::resetAllParams()
         "distance", "azimuth", "elevation", "gain_db",
         "listener_x", "listener_y", "listener_z",
         "yaw", "pitch", "roll",
+        "source_yaw", "source_pitch", "source_roll",
+        "occlusion",
+        "dir_inner_deg", "dir_outer_deg",
+        "dir_outer_gain", "dir_outer_lp",
+        "direct_path_gain",
     };
     for (auto* id : ids)
     {
@@ -344,6 +384,19 @@ void SpatialAudioEditor::resized()
     resetButton_.setBounds(bottom.removeFromRight(72));
     bottom.removeFromRight(6);
     gainSlider_.setBounds(bottom);
+
+    area.removeFromBottom(6);
+
+    // M6 row: 9 compact rotaries with labels below.
+    auto m6Row = area.removeFromBottom(86);
+    const int cellW = m6Row.getWidth() / kM6Count;
+    for (int i = 0; i < kM6Count; ++i)
+    {
+        auto cell = m6Row.removeFromLeft(cellW).reduced(2);
+        auto lbl  = cell.removeFromTop(14);
+        m6Labels_[(size_t) i].setBounds(lbl);
+        m6Sliders_[(size_t) i].setBounds(cell);
+    }
 
     area.removeFromBottom(6);
 

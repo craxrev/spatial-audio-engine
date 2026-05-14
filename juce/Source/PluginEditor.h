@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include "PluginProcessor.h"
@@ -29,6 +31,12 @@ private:
     juce::TextButton resetButton_ { "Reset" };
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
     std::unique_ptr<SliderAttachment> gainAttachment_;
+
+    // M6: directivity/occlusion/source-orientation/direct-path row.
+    static constexpr int kM6Count = 9;
+    std::array<juce::Slider, kM6Count> m6Sliders_;
+    std::array<juce::Label,  kM6Count> m6Labels_;
+    std::array<std::unique_ptr<SliderAttachment>, kM6Count> m6Attach_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SpatialAudioEditor)
 };

@@ -1,9 +1,15 @@
-//! Top-level engine. For M3: listener, N sources, ambisonic bus,
-//! and a per-block process loop. HRTF decode (M4), reverb (M7),
-//! externalizer (M8), and the rest of the §12 pipeline land in
-//! later milestones; M3 stops at the encoded ambi bus.
+//! Top-level engine. M3 covered listener + sources + ambisonic bus +
+//! per-block process loop. M4 added the HRTF binaural decode. M6
+//! adds source orientation, the directivity cone (§6.2), occlusion +
+//! directivity low-pass (§6.3), and `direct_path_gain` (§6.4).
+//! Reverb (M7), externalizer (M8), and the rest of §12 land later.
 
-use crate::consts::{BLOCK_SIZE, NUM_AMBI, OUTPUT_CHANNELS, SH_W_NORM};
+use core::f32::consts::PI;
+
+use crate::consts::{
+    BLOCK_SIZE, NUM_AMBI, OCCLUSION_FC_MAX_FACTOR, OCCLUSION_FREQ_BASE, OCCLUSION_FREQ_SCALE,
+    OUTPUT_CHANNELS, SH_W_NORM,
+};
 use crate::decoder::HrtfDecoder;
 use crate::hrtf::Hrtf;
 use crate::math::{Quat, Vec3};
@@ -82,6 +88,15 @@ impl Engine {
         }
     }
 
+    /// Source orientation quaternion `(w, x, y, z)` in the engine's
+    /// active coord frame (engine-native by default). Used by the
+    /// §6.2 directivity cone to compute the source's forward vector.
+    pub fn set_source_rotation(&mut self, idx: usize, w: f32, x: f32, y: f32, z: f32) {
+        if let Some(s) = self.sources.get_mut(idx) {
+            s.rotation = Quat::new(w, x, y, z);
+        }
+    }
+
     pub fn set_source_gain(&mut self, idx: usize, gain: f32) {
         if let Some(s) = self.sources.get_mut(idx) {
             s.gain.set_target(gain);
@@ -91,6 +106,39 @@ impl Engine {
     pub fn set_source_active(&mut self, idx: usize, active: bool) {
         if let Some(s) = self.sources.get_mut(idx) {
             s.active = active;
+        }
+    }
+
+    /// §6.4 multiplicative gain on the direct path only.
+    pub fn set_source_direct_path_gain(&mut self, idx: usize, gain: f32) {
+        if let Some(s) = self.sources.get_mut(idx) {
+            s.direct_path_gain = gain;
+        }
+    }
+
+    /// §6.3 occlusion target ∈ [0, 1]. Smoothed via the source's
+    /// occlusion ramp; drives the per-source low-pass cutoff.
+    pub fn set_source_occlusion(&mut self, idx: usize, occlusion: f32) {
+        if let Some(s) = self.sources.get_mut(idx) {
+            s.occlusion.set_target(occlusion.clamp(0.0, 1.0));
+        }
+    }
+
+    /// §6.2 directivity-cone parameters. Angles in radians. Defaults
+    /// `{0, 2π, 1, 0}` disable the cone.
+    pub fn set_source_directivity(
+        &mut self,
+        idx: usize,
+        inner_ang: f32,
+        outer_ang: f32,
+        outer_gain: f32,
+        outer_lp: f32,
+    ) {
+        if let Some(s) = self.sources.get_mut(idx) {
+            s.inner_ang = inner_ang;
+            s.outer_ang = outer_ang;
+            s.outer_gain = outer_gain;
+            s.outer_lp = outer_lp;
         }
     }
 
@@ -107,7 +155,13 @@ impl Engine {
             if !src.active || i >= inputs.len() {
                 continue;
             }
-            process_source(src, &self.listener, &inputs[i], &mut self.ambi_bus);
+            process_source(
+                src,
+                &self.listener,
+                self.sample_rate,
+                &inputs[i],
+                &mut self.ambi_bus,
+            );
         }
         if let Some(decoder) = self.decoder.as_mut() {
             decoder.process(&self.ambi_bus, &mut self.stereo_out);
@@ -122,9 +176,11 @@ impl Engine {
 fn process_source(
     src: &mut Source,
     listener: &Listener,
+    sample_rate: u32,
     input: &[f32; BLOCK_SIZE],
     ambi_bus: &mut [[f32; BLOCK_SIZE]],
 ) {
+    // §6.1 listener-relative position.
     let delta = src.pos - listener.pos;
     let new_rel = listener.quat.conjugate().rotate(delta);
     if new_rel != src.rel_pos {
@@ -132,6 +188,21 @@ fn process_source(
         src.pos_dirty = true;
     }
 
+    // §6.2 directivity cone (uses world-frame source/listener).
+    let (dir_gain_target, dir_lp_offset) = compute_directivity(src, listener);
+    if (dir_gain_target - src.directivity_gain.target).abs() > 0.0 {
+        src.directivity_gain.set_target(dir_gain_target);
+    }
+    src.directivity_lp_offset = dir_lp_offset;
+
+    // §6.3 LP coefficient update (once per block; gate per spec).
+    let total = (src.occlusion.current + dir_lp_offset).max(0.0);
+    if total != src.lp_total_last {
+        update_lp_coeffs(src, total, sample_rate);
+        src.lp_total_last = total;
+    }
+
+    // §6.4 SH re-encode + crossfade flag.
     let was_dirty = src.pos_dirty;
     if was_dirty {
         src.sh_gains_old = src.sh_gains_new;
@@ -140,9 +211,21 @@ fn process_source(
     }
 
     let n = BLOCK_SIZE as f32;
+    let b0 = src.lp_b0;
+    let a1 = src.lp_a1;
     for i in 0..BLOCK_SIZE {
+        // §6.3 1-pole LP: y = b0·x + state ; state = y·a1 + b0·x
+        let x = input[i];
+        let y = b0 * x + src.lp_state;
+        src.lp_state = y * a1 + b0 * x;
+
+        // Per-sample ramps.
         let g = src.gain.tick();
-        let s = input[i];
+        let dg = src.directivity_gain.tick();
+        src.occlusion.tick();
+
+        let g_direct = g * src.direct_path_gain * dg;
+
         if was_dirty {
             let t = (i as f32) / n;
             for ((ch, &old), &new_) in ambi_bus
@@ -151,14 +234,62 @@ fn process_source(
                 .zip(src.sh_gains_new.iter())
             {
                 let sh = old + t * (new_ - old);
-                ch[i] += g * sh * s;
+                ch[i] += g_direct * sh * y;
             }
         } else {
             for (ch, &new_) in ambi_bus.iter_mut().zip(src.sh_gains_new.iter()) {
-                ch[i] += g * new_ * s;
+                ch[i] += g_direct * new_ * y;
             }
         }
     }
+
+    // §6.3 denormal flush.
+    if src.lp_state.abs() < 1.175e-38 {
+        src.lp_state = 0.0;
+    }
+}
+
+/// §6.2 directivity cone. Forward vector uses engine-native +X
+/// (verified against the baseline behavior — see development notes). The
+/// `r == 0` fallback also uses `(1, 0, 0)`.
+fn compute_directivity(src: &Source, listener: &Listener) -> (f32, f32) {
+    let forward = src.rotation.rotate(Vec3::new(1.0, 0.0, 0.0));
+    let delta = listener.pos - src.pos;
+    let r = delta.length();
+    let to_listener = if r > 0.0 {
+        delta * (1.0 / r)
+    } else {
+        Vec3::new(1.0, 0.0, 0.0)
+    };
+    let d = forward.dot(to_listener).clamp(-1.0, 1.0);
+    let angle = d.acos();
+
+    let t = if angle <= src.inner_ang {
+        0.0
+    } else if angle >= src.outer_ang {
+        1.0
+    } else {
+        let span = src.outer_ang - src.inner_ang;
+        if span > 0.0 {
+            (angle - src.inner_ang) / span
+        } else {
+            1.0
+        }
+    };
+
+    let dir_gain = 1.0 + t * (src.outer_gain - 1.0);
+    let dir_lp_offset = t * src.outer_lp;
+    (dir_gain, dir_lp_offset)
+}
+
+fn update_lp_coeffs(src: &mut Source, total: f32, sample_rate: u32) {
+    let sr = sample_rate as f32;
+    let fc_raw = OCCLUSION_FREQ_BASE.powf(1.0 - total) * OCCLUSION_FREQ_SCALE;
+    let fc = fc_raw.min(sr * OCCLUSION_FC_MAX_FACTOR);
+    let w = (PI * fc / sr).tan();
+    let inv = 1.0 / (1.0 + w);
+    src.lp_b0 = w * inv;
+    src.lp_a1 = (1.0 - w) * inv;
 }
 
 /// §5 SH-encoder wrapper without the curve override (M3 uses the
@@ -180,13 +311,14 @@ fn compute_sh_gains(rel: Vec3, out: &mut [f32; NUM_AMBI]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
 
     fn dc_inputs(n: usize, value: f32) -> Vec<[f32; BLOCK_SIZE]> {
         vec![[value; BLOCK_SIZE]; n]
     }
 
     fn settle(e: &mut Engine, inputs: &[[f32; BLOCK_SIZE]]) {
-        // 2 blocks is enough for the BLOCK_SIZE-length gain ramp.
+        // Two blocks settles the BLOCK_SIZE-length gain ramp.
         for _ in 0..2 {
             e.process_block(inputs);
         }
@@ -194,6 +326,13 @@ mod tests {
 
     fn channel_energy(ch: &[f32; BLOCK_SIZE]) -> f32 {
         ch.iter().map(|v| v * v).sum()
+    }
+
+    fn settle_occlusion(e: &mut Engine, inputs: &[[f32; BLOCK_SIZE]]) {
+        // 1000-sample ramp / 128-sample block → ~8 blocks to fully settle.
+        for _ in 0..16 {
+            e.process_block(inputs);
+        }
     }
 
     #[test]
@@ -337,8 +476,8 @@ mod tests {
 
         // Now rotate listener +90° about Z. Source should appear on
         // the listener's right (native −Y).
-        let s = std::f32::consts::FRAC_PI_4.sin();
-        let c = std::f32::consts::FRAC_PI_4.cos();
+        let s = FRAC_PI_4.sin();
+        let c = FRAC_PI_4.cos();
         e.set_listener_rotation(c, 0.0, 0.0, s);
         settle(&mut e, &input);
 
@@ -366,5 +505,149 @@ mod tests {
         let y = channel_energy(&e.ambi_bus[1]);
         assert!(x > 0.0);
         assert!(y > 0.0);
+    }
+
+    // ----- M6 -----
+
+    #[test]
+    fn direct_path_gain_scales_ambi_energy() {
+        let mut e = Engine::new(48000, 1);
+        e.set_source_active(0, true);
+        e.set_source_position(0, 1.0, 0.0, 0.0);
+        e.set_source_gain(0, 1.0);
+        let input = dc_inputs(1, 1.0);
+        settle(&mut e, &input);
+        let base = channel_energy(&e.ambi_bus[0]);
+
+        e.set_source_direct_path_gain(0, 0.5);
+        // No ramp on direct_path_gain itself; engine takes effect
+        // immediately. Run an extra block for the gain-ramp tail to
+        // settle around the new product.
+        settle(&mut e, &input);
+        let half = channel_energy(&e.ambi_bus[0]);
+
+        // 0.5² = 0.25.
+        let ratio = half / base;
+        assert!((ratio - 0.25).abs() < 0.02, "ratio={ratio}");
+    }
+
+    #[test]
+    fn occlusion_zero_passes_dc_unchanged() {
+        // At total=0 the LP cutoff is clipped to 0.425·fs, which still
+        // passes DC essentially unattenuated. Same energy as no occlusion.
+        let mut e = Engine::new(48000, 1);
+        e.set_source_active(0, true);
+        e.set_source_position(0, 1.0, 0.0, 0.0);
+        e.set_source_gain(0, 1.0);
+        e.set_source_occlusion(0, 0.0);
+        let input = dc_inputs(1, 1.0);
+        settle_occlusion(&mut e, &input);
+        let energy = channel_energy(&e.ambi_bus[0]);
+        assert!(energy > 0.0);
+    }
+
+    #[test]
+    fn occlusion_one_attenuates_hf() {
+        // At total=1 the LP cutoff is ~20 Hz. A 4 kHz tone should be
+        // attenuated by orders of magnitude relative to no occlusion.
+        let sr = 48000.0_f32;
+        let freq = 4000.0_f32;
+        let blocks = 32; // covers occlusion ramp + filter settling
+
+        let mut sine_inputs: Vec<[f32; BLOCK_SIZE]> = Vec::with_capacity(blocks);
+        let mut phase = 0.0_f32;
+        let step = 2.0 * PI * freq / sr;
+        for _ in 0..blocks {
+            let mut b = [0.0_f32; BLOCK_SIZE];
+            for v in &mut b {
+                *v = phase.sin();
+                phase += step;
+                if phase > TAU {
+                    phase -= TAU;
+                }
+            }
+            sine_inputs.push(b);
+        }
+
+        let mut e_open = Engine::new(48000, 1);
+        e_open.set_source_active(0, true);
+        e_open.set_source_position(0, 1.0, 0.0, 0.0);
+        e_open.set_source_gain(0, 1.0);
+        e_open.set_source_occlusion(0, 0.0);
+        for b in &sine_inputs {
+            e_open.process_block(std::slice::from_ref(b));
+        }
+        let open_energy: f32 = e_open.ambi_bus[0].iter().map(|v| v * v).sum();
+
+        let mut e_occl = Engine::new(48000, 1);
+        e_occl.set_source_active(0, true);
+        e_occl.set_source_position(0, 1.0, 0.0, 0.0);
+        e_occl.set_source_gain(0, 1.0);
+        e_occl.set_source_occlusion(0, 1.0);
+        for b in &sine_inputs {
+            e_occl.process_block(std::slice::from_ref(b));
+        }
+        let occl_energy: f32 = e_occl.ambi_bus[0].iter().map(|v| v * v).sum();
+
+        assert!(open_energy > 0.0);
+        assert!(
+            occl_energy * 1000.0 < open_energy,
+            "occluded HF should be << open: open={open_energy}, occl={occl_energy}"
+        );
+    }
+
+    #[test]
+    fn directivity_off_axis_uses_outer_gain() {
+        // Source at +X, oriented facing +X (identity quat). Listener
+        // at origin → to_listener = (−1, 0, 0). forward = (+1, 0, 0).
+        // Angle = π (180° off-axis).
+        let mut e = Engine::new(48000, 1);
+        e.set_source_active(0, true);
+        e.set_source_position(0, 1.0, 0.0, 0.0);
+        e.set_source_gain(0, 1.0);
+        // Narrow cone: inner=10°, outer=20°, outerGain=0.1, outerLP=0.
+        e.set_source_directivity(0, 10.0_f32.to_radians(), 20.0_f32.to_radians(), 0.1, 0.0);
+        let input = dc_inputs(1, 1.0);
+        // Two blocks settle gain ramp and directivity-gain ramp.
+        settle(&mut e, &input);
+
+        let off_axis = channel_energy(&e.ambi_bus[0]);
+
+        // Now flip the source to face the listener (rotate 180° about Z).
+        let s = FRAC_PI_2.sin();
+        let c = FRAC_PI_2.cos();
+        e.set_source_rotation(0, c, 0.0, 0.0, s);
+        // Two more blocks settle the directivity-gain ramp back to 1.
+        settle(&mut e, &input);
+
+        let on_axis = channel_energy(&e.ambi_bus[0]);
+
+        // off_axis should be ~outerGain² × on_axis = 0.01·on_axis.
+        let ratio = off_axis / on_axis;
+        assert!(
+            ratio < 0.04 && ratio > 0.005,
+            "off/on ratio outside expected outerGain² band: {ratio}"
+        );
+    }
+
+    #[test]
+    fn directivity_default_is_no_op() {
+        // With defaults {0, 2π, 1, 0} the cone is disabled — moving
+        // the source orientation has no effect on energy.
+        let mut e = Engine::new(48000, 1);
+        e.set_source_active(0, true);
+        e.set_source_position(0, 1.0, 0.0, 0.0);
+        e.set_source_gain(0, 1.0);
+        let input = dc_inputs(1, 1.0);
+        settle(&mut e, &input);
+        let a = channel_energy(&e.ambi_bus[0]);
+
+        let s = FRAC_PI_4.sin();
+        let c = FRAC_PI_4.cos();
+        e.set_source_rotation(0, c, 0.0, 0.0, s);
+        settle(&mut e, &input);
+        let b = channel_energy(&e.ambi_bus[0]);
+
+        assert!((a - b).abs() / a < 1e-3, "default cone should not change energy: a={a}, b={b}");
     }
 }

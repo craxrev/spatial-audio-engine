@@ -45,6 +45,22 @@ void engine_set_source_position(Engine* engine, uint32_t idx, float x, float y, 
 void engine_set_source_gain(Engine* engine, uint32_t idx, float gain);
 void engine_set_source_active(Engine* engine, uint32_t idx, bool active);
 
+// Source orientation quaternion (w, x, y, z) — engine-native frame.
+void engine_set_source_rotation(
+    Engine* engine, uint32_t idx, float w, float x, float y, float z);
+
+// Source-only direct-path gain (linear). Reverb-send path is unaffected.
+void engine_set_source_direct_path_gain(Engine* engine, uint32_t idx, float gain);
+
+// Occlusion in [0, 1]; clamped and ramped to a per-source low-pass.
+void engine_set_source_occlusion(Engine* engine, uint32_t idx, float occlusion);
+
+// Directivity cone (§6.2). Angles in radians. Defaults {0, 2π, 1, 0}
+// disable the cone.
+void engine_set_source_directivity(
+    Engine* engine, uint32_t idx,
+    float inner_ang, float outer_ang, float outer_gain, float outer_lp);
+
 // Install the main HRTF decoder from a 16,384-byte buffer matching
 // data/hrtf_decoder_native.bin. Returns true on success.
 bool engine_load_main_hrtf(Engine* engine, const uint8_t* bytes, size_t len);

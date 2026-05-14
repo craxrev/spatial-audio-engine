@@ -107,6 +107,74 @@ pub unsafe extern "C" fn engine_set_source_active(engine: *mut Engine, idx: u32,
     }
 }
 
+/// Source orientation quaternion `(w, x, y, z)` (engine-native frame).
+///
+/// # Safety
+/// `engine` must be a valid pointer from `engine_new`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn engine_set_source_rotation(
+    engine: *mut Engine,
+    idx: u32,
+    w: f32,
+    x: f32,
+    y: f32,
+    z: f32,
+) {
+    if let Some(e) = unsafe { engine.as_mut() } {
+        e.set_source_rotation(idx as usize, w, x, y, z);
+    }
+}
+
+/// §6.4 `direct_path_gain` (linear, multiplicative on the direct path).
+///
+/// # Safety
+/// `engine` must be a valid pointer from `engine_new`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn engine_set_source_direct_path_gain(
+    engine: *mut Engine,
+    idx: u32,
+    gain: f32,
+) {
+    if let Some(e) = unsafe { engine.as_mut() } {
+        e.set_source_direct_path_gain(idx as usize, gain);
+    }
+}
+
+/// §6.3 occlusion target ∈ [0, 1]. Clamped, then smoothed over the
+/// per-source occlusion ramp.
+///
+/// # Safety
+/// `engine` must be a valid pointer from `engine_new`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn engine_set_source_occlusion(
+    engine: *mut Engine,
+    idx: u32,
+    occlusion: f32,
+) {
+    if let Some(e) = unsafe { engine.as_mut() } {
+        e.set_source_occlusion(idx as usize, occlusion);
+    }
+}
+
+/// §6.2 directivity cone. Angles in radians.
+/// Defaults `{0, 2π, 1, 0}` disable the cone.
+///
+/// # Safety
+/// `engine` must be a valid pointer from `engine_new`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn engine_set_source_directivity(
+    engine: *mut Engine,
+    idx: u32,
+    inner_ang: f32,
+    outer_ang: f32,
+    outer_gain: f32,
+    outer_lp: f32,
+) {
+    if let Some(e) = unsafe { engine.as_mut() } {
+        e.set_source_directivity(idx as usize, inner_ang, outer_ang, outer_gain, outer_lp);
+    }
+}
+
 /// Install the main HRTF decoder from a 16,384-byte buffer matching
 /// `data/hrtf_decoder_native.bin`. Returns `true` on success.
 ///
