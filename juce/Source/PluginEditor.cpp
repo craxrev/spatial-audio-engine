@@ -286,7 +286,7 @@ private:
 // ---------------------------------------------------------------------------
 
 SpatialAudioEditor::SpatialAudioEditor(SpatialAudioProcessor& p)
-    : AudioProcessorEditor(p)
+    : AudioProcessorEditor(p), proc_(p)
 {
     compass_   = std::make_unique<SpatialCompass>(p.apvts);
     elevation_ = std::make_unique<ElevationStrip>(p.apvts);
@@ -303,7 +303,29 @@ SpatialAudioEditor::SpatialAudioEditor(SpatialAudioProcessor& p)
     addAndMakeVisible(gainSlider_);
     gainAttachment_ = std::make_unique<SliderAttachment>(p.apvts, "gain_db", gainSlider_);
 
+    resetButton_.setTooltip("Reset all parameters to defaults");
+    resetButton_.onClick = [this] { resetAllParams(); };
+    addAndMakeVisible(resetButton_);
+
     setSize(460, 460);
+}
+
+void SpatialAudioEditor::resetAllParams()
+{
+    constexpr const char* ids[] = {
+        "distance", "azimuth", "elevation", "gain_db",
+        "listener_x", "listener_y", "listener_z",
+        "yaw", "pitch", "roll",
+    };
+    for (auto* id : ids)
+    {
+        if (auto* p = proc_.apvts.getParameter(id))
+        {
+            p->beginChangeGesture();
+            p->setValueNotifyingHost(p->getDefaultValue());
+            p->endChangeGesture();
+        }
+    }
 }
 
 SpatialAudioEditor::~SpatialAudioEditor() = default;
@@ -319,6 +341,8 @@ void SpatialAudioEditor::resized()
 
     auto bottom = area.removeFromBottom(28);
     gainLabel_.setBounds(bottom.removeFromLeft(56));
+    resetButton_.setBounds(bottom.removeFromRight(72));
+    bottom.removeFromRight(6);
     gainSlider_.setBounds(bottom);
 
     area.removeFromBottom(6);

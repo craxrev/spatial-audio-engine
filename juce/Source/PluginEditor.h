@@ -17,11 +17,16 @@ public:
     void resized() override;
 
 private:
+    void resetAllParams();
+
+    SpatialAudioProcessor& proc_;
+
     std::unique_ptr<SpatialCompass> compass_;
     std::unique_ptr<ElevationStrip> elevation_;
 
-    juce::Slider gainSlider_;
-    juce::Label  gainLabel_;
+    juce::Slider     gainSlider_;
+    juce::Label      gainLabel_;
+    juce::TextButton resetButton_ { "Reset" };
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
     std::unique_ptr<SliderAttachment> gainAttachment_;
 
