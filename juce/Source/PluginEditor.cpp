@@ -307,25 +307,7 @@ SpatialAudioEditor::SpatialAudioEditor(SpatialAudioProcessor& p)
     resetButton_.onClick = [this] { resetAllParams(); };
     addAndMakeVisible(resetButton_);
 
-    diagToneButton_.setButtonText("Diag: music on chan 0 only");
-    diagToneButton_.setTooltip("Bypass engine; play mono-summed input on JUCE channel 0 only, "
-                               "silence on channel 1. Whichever ear hears the music IS channel 0.");
-
-    outLevelLabel_.setText("out: --", juce::dontSendNotification);
-    outLevelLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffaaaaaa));
-    outLevelLabel_.setJustificationType(juce::Justification::centredLeft);
-    outLevelLabel_.setFont(juce::Font(juce::FontOptions(11.0f)));
-    addAndMakeVisible(outLevelLabel_);
-
-    startTimerHz(20);
-    diagToneButton_.setToggleState(proc_.isLeftToneDiagnosticOn(),
-                                   juce::dontSendNotification);
-    diagToneButton_.onClick = [this] {
-        proc_.setLeftToneDiagnostic(diagToneButton_.getToggleState());
-    };
-    addAndMakeVisible(diagToneButton_);
-
-    setSize(460, 510);
+    setSize(460, 460);
 }
 
 void SpatialAudioEditor::resetAllParams()
@@ -353,37 +335,9 @@ void SpatialAudioEditor::paint(juce::Graphics& g)
     g.fillAll(juce::Colour(0xff0c0c0c));
 }
 
-void SpatialAudioEditor::timerCallback()
-{
-    const float l = proc_.outRmsL_.load();
-    const float r = proc_.outRmsR_.load();
-    const char* arrow = "  ";
-    if (l > r * 1.02f)      arrow = " <L> ";
-    else if (r > l * 1.02f) arrow = " <R> ";
-    else                    arrow = " ==  ";
-    outLevelLabel_.setText(
-        juce::String::formatted("out L=%.4f%sR=%.4f", l, arrow, r),
-        juce::dontSendNotification);
-}
-
-juce::String SpatialAudioEditor::formatLevel(float rms)
-{
-    return juce::String::formatted("%.4f", rms);
-}
-
 void SpatialAudioEditor::resized()
 {
     auto area = getLocalBounds().reduced(10);
-
-    auto levelRow = area.removeFromBottom(20);
-    outLevelLabel_.setBounds(levelRow);
-
-    area.removeFromBottom(4);
-
-    auto diagRow = area.removeFromBottom(24);
-    diagToneButton_.setBounds(diagRow);
-
-    area.removeFromBottom(6);
 
     auto bottom = area.removeFromBottom(28);
     gainLabel_.setBounds(bottom.removeFromLeft(56));
