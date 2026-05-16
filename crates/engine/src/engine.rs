@@ -12,6 +12,7 @@ use crate::consts::{
     SH_W_NORM,
 };
 use crate::decoder::HrtfDecoder;
+use crate::distance::DistanceModel;
 use crate::externalizer::Externalizer;
 use crate::hrtf::Hrtf;
 use crate::math::{Quat, Vec3};
@@ -180,6 +181,44 @@ impl Engine {
         self.externalizer.set_character(value);
     }
 
+    /// §3 distance curve. Knot gains are linear (caller does dB → linear).
+    /// Default curve is `(1 m, 0 dB) (12 m, −20 dB) (60 m, −60 dB) (100 m → 0)`.
+    /// Setting a new curve marks the source as `pos_dirty` so the SH
+    /// gains get re-encoded with the new distance attenuation next block.
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_source_distance_curve(
+        &mut self,
+        idx: usize,
+        a_dist: f32,
+        a_gain: f32,
+        b_dist: f32,
+        b_gain: f32,
+        c_dist: f32,
+        c_gain: f32,
+        d_dist: f32,
+    ) {
+        if let Some(s) = self.sources.get_mut(idx) {
+            let new_model = DistanceModel {
+                a_dist, a_gain, b_dist, b_gain, c_dist, c_gain, d_dist,
+            };
+            // Only invalidate if the curve actually changed (avoid
+            // perpetual re-encode + crossfade when the host re-sends
+            // the same values every block).
+            let m = &s.distance_model;
+            let changed = m.a_dist != new_model.a_dist
+                || m.a_gain != new_model.a_gain
+                || m.b_dist != new_model.b_dist
+                || m.b_gain != new_model.b_gain
+                || m.c_dist != new_model.c_dist
+                || m.c_gain != new_model.c_gain
+                || m.d_dist != new_model.d_dist;
+            if changed {
+                s.distance_model = new_model;
+                s.pos_dirty = true;
+            }
+        }
+    }
+
     /// §6.2 directivity-cone parameters. Angles in radians. Defaults
     /// `{0, 2π, 1, 0}` disable the cone.
     pub fn set_source_directivity(
@@ -289,17 +328,17 @@ fn process_source(
         src.lp_total_last = total;
     }
 
-    // §6.6 reverb distance attenuation. M9 will introduce a proper
-    // `distance_model_reverb` lookup; for M3/M7 use the same near-field
-    // clamp as the direct path (`1/max(r, 0.1)`).
+    // §6.6 reverb distance attenuation: use the source's distance
+    // curve (§3). M10+ may split direct/reverb curves into separate
+    // models; for M9 we share one.
     let r = new_rel.length();
-    let reverb_dist_atten = 1.0 / r.max(0.1);
+    let reverb_dist_atten = src.distance_model.gain_at(r);
 
     // §6.4 SH re-encode + crossfade flag.
     let was_dirty = src.pos_dirty;
     if was_dirty {
         src.sh_gains_old = src.sh_gains_new;
-        compute_sh_gains(new_rel, &mut src.sh_gains_new);
+        compute_sh_gains(new_rel, &src.distance_model, &mut src.sh_gains_new);
         src.pos_dirty = false;
     }
 
@@ -392,27 +431,25 @@ fn update_lp_coeffs(src: &mut Source, total: f32, sample_rate: u32) {
     src.lp_a1 = (1.0 - w) * inv;
 }
 
-/// §5 SH-encoder wrapper without the curve override (M3 uses the
-/// `1/max(r, 0.1)` fallback). `rel` is in the listener-local frame.
+/// §5 SH-encoder wrapper. M9: distance attenuation uses the source's
+/// 4-knot curve (§3) instead of the M3 `1/max(r, 0.1)` placeholder.
 ///
 /// Near-field omni blend: across `r ∈ [0, NEAR_OMNI_M]` the
-/// directional SH channels (everything but W) fade linearly to 0.
-/// Without this, a near-listener source's encoded direction lights
-/// every higher-order channel and any tiny L/R asymmetry in the
-/// bundled HRTF for that bearing gets amplified by the near-field
-/// dist_atten cap into a strong stereo bias. W (omni) energy is
-/// unaffected so loudness stays continuous.
-fn compute_sh_gains(rel: Vec3, out: &mut [f32; NUM_AMBI]) {
+/// directional SH channels (everything but W) fade linearly to 0,
+/// so a source coincident with the listener doesn't amplify any HRTF
+/// L/R asymmetry into a stereo bias. W (omni) energy stays
+/// continuous through the blend.
+fn compute_sh_gains(rel: Vec3, model: &DistanceModel, out: &mut [f32; NUM_AMBI]) {
     const NEAR_OMNI_M: f32 = 0.1;
 
     let r = rel.length();
-    let (unit, dist_atten) = if r > 0.0 {
-        (rel * (1.0 / r), 1.0 / r.max(0.1))
+    let unit = if r > 0.0 {
+        rel * (1.0 / r)
     } else {
-        (Vec3::new(1.0, 0.0, 0.0), 10.0)
+        Vec3::new(1.0, 0.0, 0.0)
     };
     sh_basis_n3d_into(unit, out);
-    let scale = dist_atten * SH_W_NORM;
+    let scale = model.gain_at(r) * SH_W_NORM;
     let omni_blend = (r / NEAR_OMNI_M).clamp(0.0, 1.0);
     for (i, v) in out.iter_mut().enumerate() {
         *v *= scale;
@@ -533,7 +570,8 @@ mod tests {
 
     #[test]
     fn closer_source_is_louder() {
-        // 1/max(r, 0.1) attenuation: r=1 → 1.0, r=10 → 0.1.
+        // Default §3 curve: r=1 m → 0 dB (gain 1.0); r=60 m → −60 dB
+        // (gain 0.001). Energy ratio ≈ 1e6 — well above the threshold.
         let mut e_near = Engine::new(48000, 1);
         e_near.set_source_active(0, true);
         e_near.set_source_position(0, 1.0, 0.0, 0.0);
@@ -541,7 +579,7 @@ mod tests {
 
         let mut e_far = Engine::new(48000, 1);
         e_far.set_source_active(0, true);
-        e_far.set_source_position(0, 10.0, 0.0, 0.0);
+        e_far.set_source_position(0, 60.0, 0.0, 0.0);
         e_far.set_source_gain(0, 1.0);
 
         let input = dc_inputs(1, 1.0);
@@ -550,8 +588,7 @@ mod tests {
 
         let near = channel_energy(&e_near.ambi_bus[0]);
         let far = channel_energy(&e_far.ambi_bus[0]);
-        // Energy ratio should be ~100 (gain ratio squared).
-        assert!(near > far * 50.0, "near={near}, far={far}");
+        assert!(near > far * 1000.0, "near={near}, far={far}");
     }
 
     #[test]
@@ -825,6 +862,38 @@ mod tests {
         }
         let y_energy: f32 = e.ambi_bus[1].iter().map(|v| v * v).sum();
         assert!(y_energy < 1e-10, "reverb_amount=0 should not feed ambi: {y_energy}");
+    }
+
+    // ----- M9 -----
+
+    #[test]
+    fn distance_curve_changes_falloff() {
+        // Default curve at r=12 → −20 dB linear 0.1. Replace with a
+        // curve that's −60 dB at the same distance → ambi energy drops
+        // by ~1000× squared.
+        let inputs = dc_inputs(1, 1.0);
+
+        let mut e_default = Engine::new(48000, 1);
+        e_default.set_source_active(0, true);
+        e_default.set_source_position(0, 12.0, 0.0, 0.0);
+        e_default.set_source_gain(0, 1.0);
+        settle(&mut e_default, &inputs);
+        let default_energy = channel_energy(&e_default.ambi_bus[0]);
+
+        let mut e_steep = Engine::new(48000, 1);
+        e_steep.set_source_active(0, true);
+        e_steep.set_source_position(0, 12.0, 0.0, 0.0);
+        e_steep.set_source_gain(0, 1.0);
+        // Steeper curve: knot B at 12 m → 0.001 (−60 dB).
+        e_steep.set_source_distance_curve(0, 1.0, 1.0, 12.0, 0.001, 60.0, 0.0001, 100.0);
+        settle(&mut e_steep, &inputs);
+        let steep_energy = channel_energy(&e_steep.ambi_bus[0]);
+
+        // 0.1² vs 0.001² ≈ 10,000× energy ratio.
+        assert!(
+            default_energy > steep_energy * 1000.0,
+            "default={default_energy}, steep={steep_energy}"
+        );
     }
 
     #[test]

@@ -71,6 +71,15 @@ void engine_set_reverb_amount(Engine* engine, float amount);
 void engine_set_externalizer_amount(Engine* engine, float value);
 void engine_set_externalizer_character(Engine* engine, float value);
 
+// §3 4-knot distance curve. Knot gains are LINEAR (caller does dB → linear).
+// D is the silence anchor (only its distance is needed).
+void engine_set_source_distance_curve(
+    Engine* engine, uint32_t idx,
+    float a_dist, float a_gain,
+    float b_dist, float b_gain,
+    float c_dist, float c_gain,
+    float d_dist);
+
 // Install the main HRTF decoder from a 16,384-byte buffer matching
 // data/hrtf_decoder_native.bin. Returns true on success.
 bool engine_load_main_hrtf(Engine* engine, const uint8_t* bytes, size_t len);

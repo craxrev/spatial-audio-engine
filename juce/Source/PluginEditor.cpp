@@ -365,9 +365,33 @@ private:
         return meters * (outerRadius() / kCompassMaxMeters);
     }
 
+    // Inverse §3 curve: given a target linear gain, return the
+    // distance at which the per-source distance model produces that
+    // gain. Model is monotonically non-increasing, so we walk the
+    // segments from A→D.
+    float distanceForGain(float gTarget) const
+    {
+        const float aD  = state_.getRawParameterValue("dist_a")->load();
+        const float bD  = state_.getRawParameterValue("dist_b")->load();
+        const float cD  = state_.getRawParameterValue("dist_c")->load();
+        const float dD  = state_.getRawParameterValue("dist_d")->load();
+        const float aG  = std::pow(10.0f, state_.getRawParameterValue("dist_a_db")->load() * 0.05f);
+        const float bG  = std::pow(10.0f, state_.getRawParameterValue("dist_b_db")->load() * 0.05f);
+        const float cG  = std::pow(10.0f, state_.getRawParameterValue("dist_c_db")->load() * 0.05f);
+
+        if (gTarget >= aG) return 0.0f;          // source louder than target even at A.
+        if (gTarget <= 0.0f) return dD;          // never silent inside the curve.
+        if (gTarget >= bG)
+            return aD + (aG - gTarget) / std::max(1e-9f, aG - bG) * (bD - aD);
+        if (gTarget >= cG)
+            return bD + (bG - gTarget) / std::max(1e-9f, bG - cG) * (cD - bD);
+        return cD + (cG - gTarget) / std::max(1e-9f, cG) * (dD - cD);
+    }
+
     // Radius at which the source level falls below `thresholdLin`, in
     // metres, for a listener at angle `angleFromForwardRad` off the
-    // source's forward axis. Combines gain × direct × directivity_gain.
+    // source's forward axis. Combines gain × direct × directivity_gain
+    // and then inverts the §3 distance curve.
     float audibilityRadiusMeters(float angleFromForwardRad, float thresholdLin) const
     {
         const float inner = juce::degreesToRadians(state_.getRawParameterValue("dir_inner_deg")->load());
@@ -386,7 +410,7 @@ private:
         const float direct  = state_.getRawParameterValue("direct_path_gain")->load();
         const float strength = gainLin * direct * dirGain;
         if (strength < 1e-6f || thresholdLin < 1e-6f) return 0.0f;
-        return strength / thresholdLin;
+        return distanceForGain(thresholdLin / strength);
     }
 
     juce::Path buildAudibilityContour(juce::Point<float> src, float yawDeg, float thresholdLin) const
@@ -815,6 +839,70 @@ SpatialAudioEditor::SpatialAudioEditor(SpatialAudioProcessor& p)
     extCharAttachment_ =
         std::make_unique<SliderAttachment>(p.apvts, "externalizer_character", extCharSlider_);
 
+    // §3 distance curve: 7 knot params + preset selector.
+    struct Preset { const char* name;
+                    float aD, aDb, bD, bDb, cD, cDb, dD; };
+    static const Preset kPresets[] = {
+        {"Default",      1.00f,  0.00f, 12.00f,-20.00f, 60.00f,-60.00f,100.00f},
+        {"Direct Sources",   0.00f, -2.47f,  2.06f, -2.75f, 19.31f,-38.93f, 25.36f},
+        {"Water Sources",    2.50f,-15.79f,  4.66f,-13.27f,  8.98f,-23.16f, 41.16f},
+        {"Birds",            5.13f,-10.53f,  7.53f,-19.58f, 19.95f,-37.46f, 25.63f},
+        {"Near Field",       3.19f, -8.64f,  5.07f,-29.89f,  7.80f,-56.19f,  8.88f},
+        {"Meeting Room",     1.52f, -0.01f,  2.34f, -3.17f,  4.32f, -6.96f, 17.95f},
+        {"Big Hall",         1.20f, -0.34f,  4.60f,  3.44f,  8.82f, -1.44f, 17.95f},
+        {"Users (Voice)",    1.52f, -0.01f, 21.62f,-42.25f, 38.81f,-44.25f, 41.00f},
+        {"Main (Exp.)",      1.34f,  0.00f, 30.00f,-40.00f, 60.00f,-57.00f,150.00f},
+        {"Secondary (Exp.)", 1.34f,  0.00f, 10.00f,-12.00f, 55.00f,-50.00f,150.00f},
+    };
+    distPresetLabel_.setText("Curve preset", juce::dontSendNotification);
+    distPresetLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffbbbbbb));
+    distPresetLabel_.setJustificationType(juce::Justification::centredRight);
+    addAndMakeVisible(distPresetLabel_);
+    int presetId = 1;
+    for (const auto& pr : kPresets)
+        distPresetBox_.addItem(pr.name, presetId++);
+    addAndMakeVisible(distPresetBox_);
+    distPresetBox_.onChange = [this] {
+        const int sel = distPresetBox_.getSelectedId() - 1;
+        if (sel < 0 || sel >= (int) (sizeof(kPresets) / sizeof(Preset))) return;
+        const auto& pr = kPresets[sel];
+        auto setp = [this](const char* id, float v) {
+            if (auto* prm = proc_.apvts.getParameter(id)) {
+                prm->beginChangeGesture();
+                prm->setValueNotifyingHost(prm->convertTo0to1(v));
+                prm->endChangeGesture();
+            }
+        };
+        setp("dist_a", pr.aD);   setp("dist_a_db", pr.aDb);
+        setp("dist_b", pr.bD);   setp("dist_b_db", pr.bDb);
+        setp("dist_c", pr.cD);   setp("dist_c_db", pr.cDb);
+        setp("dist_d", pr.dD);
+    };
+
+    auto attachKnot = [&](juce::Slider& s, juce::Label& l, const char* label,
+                          const char* id, const char* tip,
+                          std::unique_ptr<SliderAttachment>& att) {
+        initLeftLabel(l, label);
+        initLinearSlider(s);
+        s.setTooltip(tip);
+        att = std::make_unique<SliderAttachment>(p.apvts, id, s);
+    };
+    attachKnot(distASlider_,   distALabel_,   "A dist", "dist_a",
+               "First knot distance. Below this, source plays at A dB.", distAAttachment_);
+    attachKnot(distAdBSlider_, distAdBLabel_, "A dB",   "dist_a_db",
+               "Gain at the first knot (typically 0 dB).", distAdBAttachment_);
+    attachKnot(distBSlider_,   distBLabel_,   "B dist", "dist_b",
+               "Second knot distance.", distBAttachment_);
+    attachKnot(distBdBSlider_, distBdBLabel_, "B dB",   "dist_b_db",
+               "Gain at the second knot.", distBdBAttachment_);
+    attachKnot(distCSlider_,   distCLabel_,   "C dist", "dist_c",
+               "Third knot distance.", distCAttachment_);
+    attachKnot(distCdBSlider_, distCdBLabel_, "C dB",   "dist_c_db",
+               "Gain at the third knot.", distCdBAttachment_);
+    attachKnot(distDSlider_,   distDLabel_,   "D dist", "dist_d",
+               "Silence anchor: source is fully silent beyond this distance.",
+               distDAttachment_);
+
     resetButton_.setTooltip("Reset all parameters to defaults.");
     resetButton_.onClick = [this] { resetAllParams(); };
     addAndMakeVisible(resetButton_);
@@ -825,7 +913,7 @@ SpatialAudioEditor::SpatialAudioEditor(SpatialAudioProcessor& p)
     aimAttachment_ = std::make_unique<ButtonAttachment>(
         p.apvts, "aim_at_listener", aimAtListenerButton_);
 
-    setSize(520, 800);
+    setSize(560, 1000);
 }
 
 SpatialAudioEditor::~SpatialAudioEditor() = default;
@@ -843,6 +931,8 @@ void SpatialAudioEditor::resetAllParams()
         "direct_path_gain",
         "reverb_send", "reverb_amount",
         "externalizer_amount", "externalizer_character",
+        "dist_a", "dist_a_db", "dist_b", "dist_b_db",
+        "dist_c", "dist_c_db", "dist_d",
         "aim_at_listener",
     };
     for (auto* id : ids)
@@ -880,6 +970,18 @@ void SpatialAudioEditor::resized()
     bottom.removeFromRight(6);
     gainSlider_.setBounds(bottom);
 
+    layoutSlider(row(24), distDLabel_,        distDSlider_);
+    layoutSlider(row(24), distCdBLabel_,      distCdBSlider_);
+    layoutSlider(row(24), distCLabel_,        distCSlider_);
+    layoutSlider(row(24), distBdBLabel_,      distBdBSlider_);
+    layoutSlider(row(24), distBLabel_,        distBSlider_);
+    layoutSlider(row(24), distAdBLabel_,      distAdBSlider_);
+    layoutSlider(row(24), distALabel_,        distASlider_);
+    {
+        auto r = row(24);
+        distPresetLabel_.setBounds(r.removeFromLeft(80));
+        distPresetBox_.setBounds(r);
+    }
     layoutSlider(row(24), extCharLabel_,      extCharSlider_);
     layoutSlider(row(24), extAmountLabel_,    extAmountSlider_);
     layoutSlider(row(24), reverbAmountLabel_, reverbAmountSlider_);

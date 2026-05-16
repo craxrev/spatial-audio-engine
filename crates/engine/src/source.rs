@@ -6,6 +6,7 @@
 use core::f32::consts::TAU;
 
 use crate::consts::{BLOCK_SIZE, NUM_AMBI, OCCLUSION_RAMP_SAMPLES};
+use crate::distance::DistanceModel;
 use crate::math::{Quat, Vec3};
 use crate::ramp::Ramp;
 
@@ -43,6 +44,11 @@ pub struct Source {
     /// `gain · rev_send.current · filtered` into the mono reverb input bus.
     pub rev_send: Ramp,
 
+    /// §3 4-knot distance → gain curve. Replaces the placeholder
+    /// `1/max(r, 0.1)` fallback used in M3-M8. Drives both the direct
+    /// path attenuation and the reverb send distance attenuation.
+    pub distance_model: DistanceModel,
+
     // §6.3 1-pole low-pass state. Coefficients are recomputed only
     // when `total = clamp(occl_now + dir_lp_offset, 0, ∞)` changes
     // (either because the occlusion ramp is active or because the
@@ -77,6 +83,7 @@ impl Default for Source {
             directivity_lp_offset: 0.0,
             occlusion: Ramp::new(0.0, OCCLUSION_RAMP_SAMPLES),
             rev_send: Ramp::new(0.0, BLOCK_SIZE as u32),
+            distance_model: DistanceModel::default(),
             lp_state: 0.0,
             // total=0 → fc ≈ fs/2 → b0 ≈ 1, a1 ≈ 0 (transparent).
             // First block always recomputes; these are placeholders.

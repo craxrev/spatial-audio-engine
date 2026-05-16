@@ -48,6 +48,22 @@ private:
     juce::Label      extAmountLabel_;
     juce::Slider     extCharSlider_;
     juce::Label      extCharLabel_;
+    juce::ComboBox   distPresetBox_;
+    juce::Label      distPresetLabel_;
+    juce::Slider     distASlider_;
+    juce::Label      distALabel_;
+    juce::Slider     distAdBSlider_;
+    juce::Label      distAdBLabel_;
+    juce::Slider     distBSlider_;
+    juce::Label      distBLabel_;
+    juce::Slider     distBdBSlider_;
+    juce::Label      distBdBLabel_;
+    juce::Slider     distCSlider_;
+    juce::Label      distCLabel_;
+    juce::Slider     distCdBSlider_;
+    juce::Label      distCdBLabel_;
+    juce::Slider     distDSlider_;
+    juce::Label      distDLabel_;
     juce::TextButton resetButton_ { "Reset" };
     juce::ToggleButton aimAtListenerButton_ { "Aim at listener" };
 
@@ -64,6 +80,13 @@ private:
     std::unique_ptr<SliderAttachment> reverbAmountAttachment_;
     std::unique_ptr<SliderAttachment> extAmountAttachment_;
     std::unique_ptr<SliderAttachment> extCharAttachment_;
+    std::unique_ptr<SliderAttachment> distAAttachment_;
+    std::unique_ptr<SliderAttachment> distAdBAttachment_;
+    std::unique_ptr<SliderAttachment> distBAttachment_;
+    std::unique_ptr<SliderAttachment> distBdBAttachment_;
+    std::unique_ptr<SliderAttachment> distCAttachment_;
+    std::unique_ptr<SliderAttachment> distCdBAttachment_;
+    std::unique_ptr<SliderAttachment> distDAttachment_;
     std::unique_ptr<ButtonAttachment> aimAttachment_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SpatialAudioEditor)

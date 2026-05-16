@@ -160,6 +160,30 @@ SpatialAudioProcessor::makeParameterLayout()
                                     R{0.0f, 100.0f, 0.1f},   50.0f,
                                     Attrs().withStringFromValueFunction(fmtUnit)));
 
+    // §3 4-knot distance curve. Defaults = bit-verified default values
+    // (1 m, 0 dB) (12 m, −20 dB) (60 m, −60 dB) (100 m → 0).
+    layout.add(std::make_unique<P>(juce::ParameterID{"dist_a",   1}, "Curve A dist",
+                                    R{0.0f, 100.0f, 0.01f},    1.0f,
+                                    Attrs().withStringFromValueFunction(fmtMeters)));
+    layout.add(std::make_unique<P>(juce::ParameterID{"dist_a_db",1}, "Curve A dB",
+                                    R{-80.0f, 12.0f, 0.1f},    0.0f,
+                                    Attrs().withStringFromValueFunction(fmtDb)));
+    layout.add(std::make_unique<P>(juce::ParameterID{"dist_b",   1}, "Curve B dist",
+                                    R{0.0f, 200.0f, 0.01f},   12.0f,
+                                    Attrs().withStringFromValueFunction(fmtMeters)));
+    layout.add(std::make_unique<P>(juce::ParameterID{"dist_b_db",1}, "Curve B dB",
+                                    R{-80.0f, 12.0f, 0.1f},  -20.0f,
+                                    Attrs().withStringFromValueFunction(fmtDb)));
+    layout.add(std::make_unique<P>(juce::ParameterID{"dist_c",   1}, "Curve C dist",
+                                    R{0.0f, 200.0f, 0.01f},   60.0f,
+                                    Attrs().withStringFromValueFunction(fmtMeters)));
+    layout.add(std::make_unique<P>(juce::ParameterID{"dist_c_db",1}, "Curve C dB",
+                                    R{-80.0f, 12.0f, 0.1f},  -60.0f,
+                                    Attrs().withStringFromValueFunction(fmtDb)));
+    layout.add(std::make_unique<P>(juce::ParameterID{"dist_d",   1}, "Curve D dist",
+                                    R{0.0f, 300.0f, 0.01f},  100.0f,
+                                    Attrs().withStringFromValueFunction(fmtMeters)));
+
     layout.add(std::make_unique<juce::AudioParameterBool>(
         juce::ParameterID{"aim_at_listener", 1}, "Aim at listener", true));
 
@@ -197,6 +221,13 @@ SpatialAudioProcessor::SpatialAudioProcessor()
     pRevAmount_ = apvts.getRawParameterValue("reverb_amount");
     pExtAmount_ = apvts.getRawParameterValue("externalizer_amount");
     pExtChar_   = apvts.getRawParameterValue("externalizer_character");
+    pDistA_     = apvts.getRawParameterValue("dist_a");
+    pDistAdB_   = apvts.getRawParameterValue("dist_a_db");
+    pDistB_     = apvts.getRawParameterValue("dist_b");
+    pDistBdB_   = apvts.getRawParameterValue("dist_b_db");
+    pDistC_     = apvts.getRawParameterValue("dist_c");
+    pDistCdB_   = apvts.getRawParameterValue("dist_c_db");
+    pDistD_     = apvts.getRawParameterValue("dist_d");
 
     setLatencySamples(ENGINE_BLOCK);
 }
@@ -289,6 +320,16 @@ void SpatialAudioProcessor::applyParametersToEngine()
 
     engine_set_externalizer_amount(engine_, pExtAmount_->load());
     engine_set_externalizer_character(engine_, pExtChar_->load());
+
+    const float aLin = std::pow(10.0f, pDistAdB_->load() * 0.05f);
+    const float bLin = std::pow(10.0f, pDistBdB_->load() * 0.05f);
+    const float cLin = std::pow(10.0f, pDistCdB_->load() * 0.05f);
+    engine_set_source_distance_curve(
+        engine_, 0,
+        pDistA_->load(), aLin,
+        pDistB_->load(), bLin,
+        pDistC_->load(), cLin,
+        pDistD_->load());
 }
 
 void SpatialAudioProcessor::processOneEngineBlock()

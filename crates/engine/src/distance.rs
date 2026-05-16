@@ -16,6 +16,22 @@ pub struct DistanceModel {
     pub d_dist: f32,
 }
 
+impl Default for DistanceModel {
+    /// Bit-verified spec default: (1 m, 0 dB), (12 m, −20 dB),
+    /// (60 m, −60 dB), (100 m → silence).
+    fn default() -> Self {
+        Self {
+            a_dist: 1.0,
+            a_gain: 1.0,    // 0 dB
+            b_dist: 12.0,
+            b_gain: 0.1,    // -20 dB
+            c_dist: 60.0,
+            c_gain: 0.001,  // -60 dB
+            d_dist: 100.0,
+        }
+    }
+}
+
 impl DistanceModel {
     pub fn gain_at(&self, r: f32) -> f32 {
         if r <= self.a_dist {

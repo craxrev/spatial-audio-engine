@@ -85,6 +85,13 @@ private:
     std::atomic<float>* pRevAmount_ = nullptr;
     std::atomic<float>* pExtAmount_ = nullptr;
     std::atomic<float>* pExtChar_   = nullptr;
+    std::atomic<float>* pDistA_     = nullptr;
+    std::atomic<float>* pDistAdB_   = nullptr;
+    std::atomic<float>* pDistB_     = nullptr;
+    std::atomic<float>* pDistBdB_   = nullptr;
+    std::atomic<float>* pDistC_     = nullptr;
+    std::atomic<float>* pDistCdB_   = nullptr;
+    std::atomic<float>* pDistD_     = nullptr;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SpatialAudioProcessor)
 };

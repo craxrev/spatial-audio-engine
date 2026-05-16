@@ -205,6 +205,31 @@ pub unsafe extern "C" fn engine_set_externalizer_character(engine: *mut Engine, 
     }
 }
 
+/// §3 4-knot distance curve. Knot gains are linear; caller must
+/// pre-convert dB → linear (`10^(dB/20)`).
+///
+/// # Safety
+/// `engine` must be a valid pointer from `engine_new`.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn engine_set_source_distance_curve(
+    engine: *mut Engine,
+    idx: u32,
+    a_dist: f32,
+    a_gain: f32,
+    b_dist: f32,
+    b_gain: f32,
+    c_dist: f32,
+    c_gain: f32,
+    d_dist: f32,
+) {
+    if let Some(e) = unsafe { engine.as_mut() } {
+        e.set_source_distance_curve(
+            idx as usize, a_dist, a_gain, b_dist, b_gain, c_dist, c_gain, d_dist,
+        );
+    }
+}
+
 /// §6.2 directivity cone. Angles in radians.
 /// Defaults `{0, 2π, 1, 0}` disable the cone.
 ///
