@@ -803,6 +803,18 @@ SpatialAudioEditor::SpatialAudioEditor(SpatialAudioProcessor& p)
     reverbAmountAttachment_ =
         std::make_unique<SliderAttachment>(p.apvts, "reverb_amount", reverbAmountSlider_);
 
+    initLeftLabel(extAmountLabel_, "Ext. Amount");
+    initLinearSlider(extAmountSlider_);
+    extAmountSlider_.setTooltip("Externalizer amount (0..100). 0 = off; higher = stronger out-of-head effect (and more signal attenuation).");
+    extAmountAttachment_ =
+        std::make_unique<SliderAttachment>(p.apvts, "externalizer_amount", extAmountSlider_);
+
+    initLeftLabel(extCharLabel_, "Ext. Character");
+    initLinearSlider(extCharSlider_);
+    extCharSlider_.setTooltip("Externalizer tilt EQ (0..100, 50 = neutral). Below 50 = brighter; above 50 = darker.");
+    extCharAttachment_ =
+        std::make_unique<SliderAttachment>(p.apvts, "externalizer_character", extCharSlider_);
+
     resetButton_.setTooltip("Reset all parameters to defaults.");
     resetButton_.onClick = [this] { resetAllParams(); };
     addAndMakeVisible(resetButton_);
@@ -813,7 +825,7 @@ SpatialAudioEditor::SpatialAudioEditor(SpatialAudioProcessor& p)
     aimAttachment_ = std::make_unique<ButtonAttachment>(
         p.apvts, "aim_at_listener", aimAtListenerButton_);
 
-    setSize(520, 740);
+    setSize(520, 800);
 }
 
 SpatialAudioEditor::~SpatialAudioEditor() = default;
@@ -830,6 +842,7 @@ void SpatialAudioEditor::resetAllParams()
         "dir_outer_gain", "dir_outer_lp",
         "direct_path_gain",
         "reverb_send", "reverb_amount",
+        "externalizer_amount", "externalizer_character",
         "aim_at_listener",
     };
     for (auto* id : ids)
@@ -867,6 +880,8 @@ void SpatialAudioEditor::resized()
     bottom.removeFromRight(6);
     gainSlider_.setBounds(bottom);
 
+    layoutSlider(row(24), extCharLabel_,      extCharSlider_);
+    layoutSlider(row(24), extAmountLabel_,    extAmountSlider_);
     layoutSlider(row(24), reverbAmountLabel_, reverbAmountSlider_);
     layoutSlider(row(24), reverbSendLabel_,   reverbSendSlider_);
     layoutSlider(row(24), directPathLabel_,   directPathSlider_);

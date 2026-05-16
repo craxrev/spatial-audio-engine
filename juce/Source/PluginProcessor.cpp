@@ -150,11 +150,18 @@ SpatialAudioProcessor::makeParameterLayout()
                                     R{0.0f, 1.0f, 0.001f},    0.3f,
                                     Attrs().withStringFromValueFunction(fmtUnit)));
     layout.add(std::make_unique<P>(juce::ParameterID{"reverb_amount", 1}, "Reverb Amount",
-                                    R{0.0f, 2.0f, 0.001f},    1.0f,
+                                    R{0.0f, 2.0f, 0.001f},    0.0f,
                                     Attrs().withStringFromValueFunction(fmtGain)));
 
+    layout.add(std::make_unique<P>(juce::ParameterID{"externalizer_amount", 1}, "Externalizer Amount",
+                                    R{0.0f, 100.0f, 0.1f},    0.0f,
+                                    Attrs().withStringFromValueFunction(fmtUnit)));
+    layout.add(std::make_unique<P>(juce::ParameterID{"externalizer_character", 1}, "Externalizer Character",
+                                    R{0.0f, 100.0f, 0.1f},   50.0f,
+                                    Attrs().withStringFromValueFunction(fmtUnit)));
+
     layout.add(std::make_unique<juce::AudioParameterBool>(
-        juce::ParameterID{"aim_at_listener", 1}, "Aim at listener", false));
+        juce::ParameterID{"aim_at_listener", 1}, "Aim at listener", true));
 
     return layout;
 }
@@ -188,6 +195,8 @@ SpatialAudioProcessor::SpatialAudioProcessor()
     pDpGain_    = apvts.getRawParameterValue("direct_path_gain");
     pRevSend_   = apvts.getRawParameterValue("reverb_send");
     pRevAmount_ = apvts.getRawParameterValue("reverb_amount");
+    pExtAmount_ = apvts.getRawParameterValue("externalizer_amount");
+    pExtChar_   = apvts.getRawParameterValue("externalizer_character");
 
     setLatencySamples(ENGINE_BLOCK);
 }
@@ -277,6 +286,9 @@ void SpatialAudioProcessor::applyParametersToEngine()
 
     engine_set_source_reverb_send(engine_, 0, pRevSend_->load());
     engine_set_reverb_amount(engine_, pRevAmount_->load());
+
+    engine_set_externalizer_amount(engine_, pExtAmount_->load());
+    engine_set_externalizer_character(engine_, pExtChar_->load());
 }
 
 void SpatialAudioProcessor::processOneEngineBlock()

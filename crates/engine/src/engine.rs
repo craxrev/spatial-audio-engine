@@ -12,6 +12,7 @@ use crate::consts::{
     SH_W_NORM,
 };
 use crate::decoder::HrtfDecoder;
+use crate::externalizer::Externalizer;
 use crate::hrtf::Hrtf;
 use crate::math::{Quat, Vec3};
 use crate::reverb::ReverbCore;
@@ -47,6 +48,7 @@ pub struct Engine {
     /// by `REV_DECODE_GAINS[k]`. Precomputed once at construction.
     rev_sh_bases: [[f32; NUM_AMBI]; FDN_SIZE],
     reverb: ReverbCore,
+    externalizer: Externalizer,
     decoder: Option<HrtfDecoder>,
 }
 
@@ -76,6 +78,7 @@ impl Engine {
             reverb_amount: 1.0,
             rev_sh_bases,
             reverb: ReverbCore::new(sample_rate),
+            externalizer: Externalizer::new(sample_rate),
             decoder: None,
         }
     }
@@ -164,6 +167,19 @@ impl Engine {
         self.reverb_amount = amount.max(0.0);
     }
 
+    /// §9.1 externalizer amount, `value ∈ [0, 100]`. 0 disables.
+    pub fn set_externalizer_amount(&mut self, value: f32) {
+        self.externalizer.set_amount(value);
+    }
+
+    /// §9.1 externalizer character (tilt EQ asymmetry), `value ∈ [0, 100]`.
+    /// 50 = neutral; below 50 brightens (cut lows, boost highs); above
+    /// 50 darkens (boost lows, cut highs). ×4 asymmetric on the "cut"
+    /// branch of each shelf — bit-verified against the v0.5 wasm.
+    pub fn set_externalizer_character(&mut self, value: f32) {
+        self.externalizer.set_character(value);
+    }
+
     /// §6.2 directivity-cone parameters. Angles in radians. Defaults
     /// `{0, 2π, 1, 0}` disable the cone.
     pub fn set_source_directivity(
@@ -236,6 +252,10 @@ impl Engine {
                 ch.fill(0.0);
             }
         }
+
+        // §9 externalizer: in-place transform of stereo_out. Skipped
+        // internally when disabled and ramped to zero.
+        self.externalizer.process(&mut self.stereo_out);
     }
 }
 

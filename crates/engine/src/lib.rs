@@ -9,6 +9,7 @@ pub mod decoder;
 pub mod diffuser;
 pub mod distance;
 pub mod engine;
+pub mod externalizer;
 pub mod hrtf;
 pub mod math;
 pub mod ramp;

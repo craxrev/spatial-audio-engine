@@ -67,6 +67,10 @@ void engine_set_source_reverb_send(Engine* engine, uint32_t idx, float send);
 // Master reverb mix (linear). 0 = dry, 1 = unity wet.
 void engine_set_reverb_amount(Engine* engine, float amount);
 
+// §9 externalizer parameters. Both 0..100; amount = 0 disables.
+void engine_set_externalizer_amount(Engine* engine, float value);
+void engine_set_externalizer_character(Engine* engine, float value);
+
 // Install the main HRTF decoder from a 16,384-byte buffer matching
 // data/hrtf_decoder_native.bin. Returns true on success.
 bool engine_load_main_hrtf(Engine* engine, const uint8_t* bytes, size_t len);

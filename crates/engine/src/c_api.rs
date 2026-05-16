@@ -183,6 +183,28 @@ pub unsafe extern "C" fn engine_set_reverb_amount(engine: *mut Engine, amount: f
     }
 }
 
+/// §9.1 externalizer amount (0..100). 0 = disabled.
+///
+/// # Safety
+/// `engine` must be a valid pointer from `engine_new`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn engine_set_externalizer_amount(engine: *mut Engine, value: f32) {
+    if let Some(e) = unsafe { engine.as_mut() } {
+        e.set_externalizer_amount(value);
+    }
+}
+
+/// §9.1 externalizer character (0..100; 50 = neutral).
+///
+/// # Safety
+/// `engine` must be a valid pointer from `engine_new`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn engine_set_externalizer_character(engine: *mut Engine, value: f32) {
+    if let Some(e) = unsafe { engine.as_mut() } {
+        e.set_externalizer_character(value);
+    }
+}
+
 /// §6.2 directivity cone. Angles in radians.
 /// Defaults `{0, 2π, 1, 0}` disable the cone.
 ///
