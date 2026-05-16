@@ -1,7 +1,5 @@
 #pragma once
 
-#include <array>
-
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include "PluginProcessor.h"
@@ -23,20 +21,38 @@ private:
 
     SpatialAudioProcessor& proc_;
 
+    juce::TooltipWindow tooltipWindow_ { this, 600 };
+
     std::unique_ptr<SpatialCompass> compass_;
     std::unique_ptr<ElevationStrip> elevation_;
 
     juce::Slider     gainSlider_;
     juce::Label      gainLabel_;
+    juce::Slider     occlusionSlider_;
+    juce::Label      occlusionLabel_;
+    juce::Slider     spreadSlider_;
+    juce::Label      spreadLabel_;
+    juce::Slider     focusSlider_;
+    juce::Label      focusLabel_;
+    juce::Slider     offGainSlider_;
+    juce::Label      offGainLabel_;
+    juce::Slider     offLpSlider_;
+    juce::Label      offLpLabel_;
+    juce::Slider     directPathSlider_;
+    juce::Label      directPathLabel_;
     juce::TextButton resetButton_ { "Reset" };
-    using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
-    std::unique_ptr<SliderAttachment> gainAttachment_;
+    juce::ToggleButton aimAtListenerButton_ { "Aim at listener" };
 
-    // M6: directivity/occlusion/source-orientation/direct-path row.
-    static constexpr int kM6Count = 9;
-    std::array<juce::Slider, kM6Count> m6Sliders_;
-    std::array<juce::Label,  kM6Count> m6Labels_;
-    std::array<std::unique_ptr<SliderAttachment>, kM6Count> m6Attach_;
+    using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
+    using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
+    std::unique_ptr<SliderAttachment> gainAttachment_;
+    std::unique_ptr<SliderAttachment> occlusionAttachment_;
+    std::unique_ptr<SliderAttachment> spreadAttachment_;
+    std::unique_ptr<SliderAttachment> focusAttachment_;
+    std::unique_ptr<SliderAttachment> offGainAttachment_;
+    std::unique_ptr<SliderAttachment> offLpAttachment_;
+    std::unique_ptr<SliderAttachment> directPathAttachment_;
+    std::unique_ptr<ButtonAttachment> aimAttachment_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SpatialAudioEditor)
 };

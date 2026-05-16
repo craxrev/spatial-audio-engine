@@ -75,7 +75,6 @@ private:
     std::atomic<float>* pRoll_      = nullptr;
     std::atomic<float>* pSrcYaw_    = nullptr;
     std::atomic<float>* pSrcPitch_  = nullptr;
-    std::atomic<float>* pSrcRoll_   = nullptr;
     std::atomic<float>* pOcclusion_ = nullptr;
     std::atomic<float>* pDirInner_  = nullptr;
     std::atomic<float>* pDirOuter_  = nullptr;
