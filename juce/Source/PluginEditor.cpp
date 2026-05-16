@@ -791,6 +791,18 @@ SpatialAudioEditor::SpatialAudioEditor(SpatialAudioProcessor& p)
     directPathAttachment_ =
         std::make_unique<SliderAttachment>(p.apvts, "direct_path_gain", directPathSlider_);
 
+    initLeftLabel(reverbSendLabel_, "Reverb Send");
+    initLinearSlider(reverbSendSlider_);
+    reverbSendSlider_.setTooltip("Per-source send into the reverb bus. 0 = dry source.");
+    reverbSendAttachment_ =
+        std::make_unique<SliderAttachment>(p.apvts, "reverb_send", reverbSendSlider_);
+
+    initLeftLabel(reverbAmountLabel_, "Reverb Amount");
+    initLinearSlider(reverbAmountSlider_);
+    reverbAmountSlider_.setTooltip("Master reverb mix multiplier. 0 = no reverb, 1 = unity.");
+    reverbAmountAttachment_ =
+        std::make_unique<SliderAttachment>(p.apvts, "reverb_amount", reverbAmountSlider_);
+
     resetButton_.setTooltip("Reset all parameters to defaults.");
     resetButton_.onClick = [this] { resetAllParams(); };
     addAndMakeVisible(resetButton_);
@@ -801,7 +813,7 @@ SpatialAudioEditor::SpatialAudioEditor(SpatialAudioProcessor& p)
     aimAttachment_ = std::make_unique<ButtonAttachment>(
         p.apvts, "aim_at_listener", aimAtListenerButton_);
 
-    setSize(520, 680);
+    setSize(520, 740);
 }
 
 SpatialAudioEditor::~SpatialAudioEditor() = default;
@@ -817,6 +829,7 @@ void SpatialAudioEditor::resetAllParams()
         "dir_inner_deg", "dir_outer_deg",
         "dir_outer_gain", "dir_outer_lp",
         "direct_path_gain",
+        "reverb_send", "reverb_amount",
         "aim_at_listener",
     };
     for (auto* id : ids)
@@ -854,12 +867,14 @@ void SpatialAudioEditor::resized()
     bottom.removeFromRight(6);
     gainSlider_.setBounds(bottom);
 
-    layoutSlider(row(24), directPathLabel_, directPathSlider_);
-    layoutSlider(row(24), offLpLabel_,      offLpSlider_);
-    layoutSlider(row(24), offGainLabel_,    offGainSlider_);
-    layoutSlider(row(24), focusLabel_,      focusSlider_);
-    layoutSlider(row(24), spreadLabel_,     spreadSlider_);
-    layoutSlider(row(24), occlusionLabel_,  occlusionSlider_);
+    layoutSlider(row(24), reverbAmountLabel_, reverbAmountSlider_);
+    layoutSlider(row(24), reverbSendLabel_,   reverbSendSlider_);
+    layoutSlider(row(24), directPathLabel_,   directPathSlider_);
+    layoutSlider(row(24), offLpLabel_,        offLpSlider_);
+    layoutSlider(row(24), offGainLabel_,      offGainSlider_);
+    layoutSlider(row(24), focusLabel_,        focusSlider_);
+    layoutSlider(row(24), spreadLabel_,       spreadSlider_);
+    layoutSlider(row(24), occlusionLabel_,    occlusionSlider_);
 
     area.removeFromBottom(6);
 

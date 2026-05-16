@@ -38,6 +38,11 @@ pub struct Source {
     /// `OCCLUSION_RAMP_SAMPLES`. Drives the §6.3 LP cutoff.
     pub occlusion: Ramp,
 
+    /// §6.6 per-source reverb send. Ticks per sample like the gain
+    /// and directivity ramps; the engine mixes
+    /// `gain · rev_send.current · filtered` into the mono reverb input bus.
+    pub rev_send: Ramp,
+
     // §6.3 1-pole low-pass state. Coefficients are recomputed only
     // when `total = clamp(occl_now + dir_lp_offset, 0, ∞)` changes
     // (either because the occlusion ramp is active or because the
@@ -71,6 +76,7 @@ impl Default for Source {
             directivity_gain: Ramp::new(1.0, BLOCK_SIZE as u32),
             directivity_lp_offset: 0.0,
             occlusion: Ramp::new(0.0, OCCLUSION_RAMP_SAMPLES),
+            rev_send: Ramp::new(0.0, BLOCK_SIZE as u32),
             lp_state: 0.0,
             // total=0 → fc ≈ fs/2 → b0 ≈ 1, a1 ≈ 0 (transparent).
             // First block always recomputes; these are placeholders.

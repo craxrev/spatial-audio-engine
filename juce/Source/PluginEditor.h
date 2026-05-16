@@ -40,6 +40,10 @@ private:
     juce::Label      offLpLabel_;
     juce::Slider     directPathSlider_;
     juce::Label      directPathLabel_;
+    juce::Slider     reverbSendSlider_;
+    juce::Label      reverbSendLabel_;
+    juce::Slider     reverbAmountSlider_;
+    juce::Label      reverbAmountLabel_;
     juce::TextButton resetButton_ { "Reset" };
     juce::ToggleButton aimAtListenerButton_ { "Aim at listener" };
 
@@ -52,6 +56,8 @@ private:
     std::unique_ptr<SliderAttachment> offGainAttachment_;
     std::unique_ptr<SliderAttachment> offLpAttachment_;
     std::unique_ptr<SliderAttachment> directPathAttachment_;
+    std::unique_ptr<SliderAttachment> reverbSendAttachment_;
+    std::unique_ptr<SliderAttachment> reverbAmountAttachment_;
     std::unique_ptr<ButtonAttachment> aimAttachment_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SpatialAudioEditor)

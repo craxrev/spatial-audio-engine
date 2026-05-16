@@ -146,6 +146,13 @@ SpatialAudioProcessor::makeParameterLayout()
                                     R{0.0f, 2.0f, 0.001f},    1.0f,
                                     Attrs().withStringFromValueFunction(fmtGain)));
 
+    layout.add(std::make_unique<P>(juce::ParameterID{"reverb_send",  1}, "Reverb Send",
+                                    R{0.0f, 1.0f, 0.001f},    0.3f,
+                                    Attrs().withStringFromValueFunction(fmtUnit)));
+    layout.add(std::make_unique<P>(juce::ParameterID{"reverb_amount", 1}, "Reverb Amount",
+                                    R{0.0f, 2.0f, 0.001f},    1.0f,
+                                    Attrs().withStringFromValueFunction(fmtGain)));
+
     layout.add(std::make_unique<juce::AudioParameterBool>(
         juce::ParameterID{"aim_at_listener", 1}, "Aim at listener", false));
 
@@ -179,6 +186,8 @@ SpatialAudioProcessor::SpatialAudioProcessor()
     pDirGain_   = apvts.getRawParameterValue("dir_outer_gain");
     pDirLp_     = apvts.getRawParameterValue("dir_outer_lp");
     pDpGain_    = apvts.getRawParameterValue("direct_path_gain");
+    pRevSend_   = apvts.getRawParameterValue("reverb_send");
+    pRevAmount_ = apvts.getRawParameterValue("reverb_amount");
 
     setLatencySamples(ENGINE_BLOCK);
 }
@@ -265,6 +274,9 @@ void SpatialAudioProcessor::applyParametersToEngine()
         juce::degreesToRadians(pDirOuter_->load()),
         pDirGain_->load(),
         pDirLp_->load());
+
+    engine_set_source_reverb_send(engine_, 0, pRevSend_->load());
+    engine_set_reverb_amount(engine_, pRevAmount_->load());
 }
 
 void SpatialAudioProcessor::processOneEngineBlock()

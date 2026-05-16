@@ -156,6 +156,33 @@ pub unsafe extern "C" fn engine_set_source_occlusion(
     }
 }
 
+/// §6.6 per-source reverb send (linear, ramped). 0 = no reverb send.
+///
+/// # Safety
+/// `engine` must be a valid pointer from `engine_new`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn engine_set_source_reverb_send(
+    engine: *mut Engine,
+    idx: u32,
+    send: f32,
+) {
+    if let Some(e) = unsafe { engine.as_mut() } {
+        e.set_source_reverb_send(idx as usize, send);
+    }
+}
+
+/// Master reverb mix multiplier. 0 = dry, 1 = unity wet. Applied to
+/// the FDN outputs before spatialisation.
+///
+/// # Safety
+/// `engine` must be a valid pointer from `engine_new`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn engine_set_reverb_amount(engine: *mut Engine, amount: f32) {
+    if let Some(e) = unsafe { engine.as_mut() } {
+        e.set_reverb_amount(amount);
+    }
+}
+
 /// §6.2 directivity cone. Angles in radians.
 /// Defaults `{0, 2π, 1, 0}` disable the cone.
 ///

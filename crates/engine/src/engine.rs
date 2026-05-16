@@ -7,12 +7,14 @@
 use core::f32::consts::PI;
 
 use crate::consts::{
-    BLOCK_SIZE, NUM_AMBI, OCCLUSION_FC_MAX_FACTOR, OCCLUSION_FREQ_BASE, OCCLUSION_FREQ_SCALE,
-    OUTPUT_CHANNELS, SH_W_NORM,
+    BLOCK_SIZE, FDN_SIZE, NUM_AMBI, OCCLUSION_FC_MAX_FACTOR, OCCLUSION_FREQ_BASE,
+    OCCLUSION_FREQ_SCALE, OUTPUT_CHANNELS, REV_DECODE_GAINS, REVERB_OUTPUT_DIRS,
+    SH_W_NORM,
 };
 use crate::decoder::HrtfDecoder;
 use crate::hrtf::Hrtf;
 use crate::math::{Quat, Vec3};
+use crate::reverb::ReverbCore;
 use crate::sh::sh_basis_n3d_into;
 use crate::source::Source;
 
@@ -37,17 +39,43 @@ pub struct Engine {
     /// Binaural stereo output of the main HRTF decoder (§8).
     /// Stays zero when no HRTF is loaded.
     pub stereo_out: [[f32; BLOCK_SIZE]; OUTPUT_CHANNELS],
+    /// Mono reverb input bus, summed across sources per block.
+    pub reverb_in_bus: [f32; BLOCK_SIZE],
+    /// Master reverb mix (0 = dry, 1 = unity wet, can go above).
+    pub reverb_amount: f32,
+    /// Per-direction SH bases for the 8 reverb output directions, scaled
+    /// by `REV_DECODE_GAINS[k]`. Precomputed once at construction.
+    rev_sh_bases: [[f32; NUM_AMBI]; FDN_SIZE],
+    reverb: ReverbCore,
     decoder: Option<HrtfDecoder>,
 }
 
 impl Engine {
     pub fn new(sample_rate: u32, num_sources: usize) -> Self {
+        let mut rev_sh_bases = [[0.0_f32; NUM_AMBI]; FDN_SIZE];
+        for k in 0..FDN_SIZE {
+            let dir = Vec3::new(
+                REVERB_OUTPUT_DIRS[k][0],
+                REVERB_OUTPUT_DIRS[k][1],
+                REVERB_OUTPUT_DIRS[k][2],
+            );
+            sh_basis_n3d_into(dir, &mut rev_sh_bases[k]);
+            let scale = SH_W_NORM * REV_DECODE_GAINS[k];
+            for v in rev_sh_bases[k].iter_mut() {
+                *v *= scale;
+            }
+        }
+
         Self {
             sample_rate,
             listener: Listener::default(),
             sources: (0..num_sources).map(|_| Source::default()).collect(),
             ambi_bus: vec![[0.0; BLOCK_SIZE]; NUM_AMBI],
             stereo_out: [[0.0; BLOCK_SIZE]; OUTPUT_CHANNELS],
+            reverb_in_bus: [0.0; BLOCK_SIZE],
+            reverb_amount: 1.0,
+            rev_sh_bases,
+            reverb: ReverbCore::new(sample_rate),
             decoder: None,
         }
     }
@@ -124,6 +152,18 @@ impl Engine {
         }
     }
 
+    /// §6.6 per-source reverb send (linear, ramped per sample).
+    pub fn set_source_reverb_send(&mut self, idx: usize, send: f32) {
+        if let Some(s) = self.sources.get_mut(idx) {
+            s.rev_send.set_target(send.max(0.0));
+        }
+    }
+
+    /// Master reverb mix multiplier (linear; 0 = dry, 1 = unity).
+    pub fn set_reverb_amount(&mut self, amount: f32) {
+        self.reverb_amount = amount.max(0.0);
+    }
+
     /// §6.2 directivity-cone parameters. Angles in radians. Defaults
     /// `{0, 2π, 1, 0}` disable the cone.
     pub fn set_source_directivity(
@@ -151,6 +191,8 @@ impl Engine {
         for ch in &mut self.ambi_bus {
             ch.fill(0.0);
         }
+        self.reverb_in_bus.fill(0.0);
+
         for (i, src) in self.sources.iter_mut().enumerate() {
             if !src.active || i >= inputs.len() {
                 continue;
@@ -161,8 +203,32 @@ impl Engine {
                 self.sample_rate,
                 &inputs[i],
                 &mut self.ambi_bus,
+                &mut self.reverb_in_bus,
             );
         }
+
+        // §7 / §13: process reverb and spatialise its 8 outputs into the
+        // ambisonic bus at the fixed direction grid, scaled by
+        // `reverb_amount` and per-direction `REV_DECODE_GAINS` (the
+        // latter baked into `rev_sh_bases`).
+        if self.reverb_amount > 0.0 {
+            let mut rev_outs = [[0.0_f32; BLOCK_SIZE]; FDN_SIZE];
+            self.reverb.process(&self.reverb_in_bus, &mut rev_outs);
+            let amt = self.reverb_amount;
+            for (k, out_k) in rev_outs.iter().enumerate() {
+                let basis = &self.rev_sh_bases[k];
+                for (ch_idx, ch) in self.ambi_bus.iter_mut().enumerate() {
+                    let g = amt * basis[ch_idx];
+                    if g == 0.0 {
+                        continue;
+                    }
+                    for i in 0..BLOCK_SIZE {
+                        ch[i] += g * out_k[i];
+                    }
+                }
+            }
+        }
+
         if let Some(decoder) = self.decoder.as_mut() {
             decoder.process(&self.ambi_bus, &mut self.stereo_out);
         } else {
@@ -179,6 +245,7 @@ fn process_source(
     sample_rate: u32,
     input: &[f32; BLOCK_SIZE],
     ambi_bus: &mut [[f32; BLOCK_SIZE]],
+    reverb_in: &mut [f32; BLOCK_SIZE],
 ) {
     // §6.1 listener-relative position.
     let delta = src.pos - listener.pos;
@@ -202,6 +269,12 @@ fn process_source(
         src.lp_total_last = total;
     }
 
+    // §6.6 reverb distance attenuation. M9 will introduce a proper
+    // `distance_model_reverb` lookup; for M3/M7 use the same near-field
+    // clamp as the direct path (`1/max(r, 0.1)`).
+    let r = new_rel.length();
+    let reverb_dist_atten = 1.0 / r.max(0.1);
+
     // §6.4 SH re-encode + crossfade flag.
     let was_dirty = src.pos_dirty;
     if was_dirty {
@@ -222,6 +295,7 @@ fn process_source(
         // Per-sample ramps.
         let g = src.gain.tick();
         let dg = src.directivity_gain.tick();
+        let rs = src.rev_send.tick();
         src.occlusion.tick();
 
         let g_direct = g * src.direct_path_gain * dg;
@@ -240,6 +314,12 @@ fn process_source(
             for (ch, &new_) in ambi_bus.iter_mut().zip(src.sh_gains_new.iter()) {
                 ch[i] += g_direct * new_ * y;
             }
+        }
+
+        // §6.6 reverb send (note: direct_path_gain & directivity are
+        // NOT applied here — reverb path is independent of the cone).
+        if rs > 0.0 {
+            reverb_in[i] += g * rs * reverb_dist_atten * y;
         }
     }
 
@@ -642,6 +722,89 @@ mod tests {
             ratio < 0.04 && ratio > 0.005,
             "off/on ratio outside expected outerGain² band: {ratio}"
         );
+    }
+
+    // ----- M7 -----
+
+    #[test]
+    fn reverb_send_zero_yields_no_reverb_tail() {
+        // Source with rev_send=0 must not energise the reverb bus, so
+        // long after the impulse the bus should be silent.
+        let mut e = Engine::new(48000, 1);
+        e.set_source_active(0, true);
+        e.set_source_position(0, 5.0, 0.0, 0.0);
+        e.set_source_gain(0, 1.0);
+        e.set_source_reverb_send(0, 0.0);
+        e.set_reverb_amount(1.0);
+
+        let mut input = [[0.0_f32; BLOCK_SIZE]; 1];
+        input[0][0] = 1.0;
+        e.process_block(&input);
+
+        input[0].fill(0.0);
+        for _ in 0..200 {
+            e.process_block(&input);
+        }
+        let bus_energy: f32 = e.reverb_in_bus.iter().map(|v| v * v).sum();
+        assert_eq!(bus_energy, 0.0);
+    }
+
+    #[test]
+    fn reverb_send_lights_bus_and_ambi() {
+        // With rev_send>0 and reverb_amount>0 the reverb tail should
+        // spread across multiple ambi channels (not just W) after the
+        // FDN settles — because the 8 outputs SH-encode at distinct
+        // §13 directions.
+        let mut e = Engine::new(48000, 1);
+        e.set_source_active(0, true);
+        e.set_source_position(0, 3.0, 0.0, 0.0);
+        e.set_source_gain(0, 1.0);
+        e.set_source_reverb_send(0, 1.0);
+        e.set_reverb_amount(1.0);
+
+        let mut input = [[0.0_f32; BLOCK_SIZE]; 1];
+        input[0][0] = 1.0;
+        e.process_block(&input);
+
+        input[0].fill(0.0);
+        // Settle through the FDN.
+        for _ in 0..150 {
+            e.process_block(&input);
+        }
+
+        // Energy in the directional ambi channels (Y/Z/X = 1/2/3)
+        // should be non-zero after the reverb spreads.
+        let mut total = 0.0_f32;
+        for k in 1..NUM_AMBI {
+            for &v in e.ambi_bus[k].iter() {
+                total += v * v;
+            }
+        }
+        assert!(total > 0.0, "reverb didn't spread to directional ambi channels");
+    }
+
+    #[test]
+    fn reverb_amount_zero_disables_reverb_in_ambi() {
+        let mut e = Engine::new(48000, 1);
+        e.set_source_active(0, true);
+        e.set_source_position(0, 3.0, 0.0, 0.0);
+        e.set_source_gain(0, 1.0);
+        e.set_source_reverb_send(0, 1.0);
+        e.set_reverb_amount(0.0);
+
+        let mut input = [[0.0_f32; BLOCK_SIZE]; 1];
+        input[0][0] = 1.0;
+        e.process_block(&input);
+
+        // No direct positional energy in Y (source is on +X), and with
+        // reverb_amount=0 no reverb energy should reach Y either, so Y
+        // stays silent after the gain ramp settles.
+        input[0].fill(0.0);
+        for _ in 0..150 {
+            e.process_block(&input);
+        }
+        let y_energy: f32 = e.ambi_bus[1].iter().map(|v| v * v).sum();
+        assert!(y_energy < 1e-10, "reverb_amount=0 should not feed ambi: {y_energy}");
     }
 
     #[test]

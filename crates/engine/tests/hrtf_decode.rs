@@ -175,3 +175,52 @@ fn no_hrtf_means_silent_stereo() {
     assert_eq!(l, 0.0);
     assert_eq!(r, 0.0);
 }
+
+#[test]
+fn reverb_tail_reaches_stereo_out() {
+    // With reverb engaged, after an impulse + silence, the binaural
+    // output should still carry tail energy long after the source has
+    // stopped — the reverb FDN must reach stereo_out.
+    let mut e = build_engine_with_source_at(3.0, 0.0, 0.0);
+    e.set_source_reverb_send(0, 1.0);
+    e.set_reverb_amount(1.0);
+
+    let mut input = [[0.0_f32; BLOCK_SIZE]; 1];
+    input[0][0] = 1.0;
+    e.process_block(&input);
+
+    // Run 200 silent blocks (~533ms at 48k) so the impulse propagates
+    // into and back out of the FDN delays and HRTF convolution.
+    input[0].fill(0.0);
+    let mut tail_energy = 0.0_f32;
+    for _ in 0..200 {
+        e.process_block(&input);
+        tail_energy += energy(&e.stereo_out[0]) + energy(&e.stereo_out[1]);
+    }
+    assert!(tail_energy > 0.0, "reverb tail never reached stereo_out");
+}
+
+#[test]
+fn reverb_amount_zero_silences_tail() {
+    // Same scenario but reverb_amount = 0: the binaural output's tail
+    // (long after impulse) should be silent.
+    let mut e = build_engine_with_source_at(3.0, 0.0, 0.0);
+    e.set_source_reverb_send(0, 1.0);
+    e.set_reverb_amount(0.0);
+
+    let mut input = [[0.0_f32; BLOCK_SIZE]; 1];
+    input[0][0] = 1.0;
+    e.process_block(&input);
+
+    input[0].fill(0.0);
+    let mut tail_energy = 0.0_f32;
+    // Skip 50 blocks past the direct-path HRTF settle, then measure.
+    for _ in 0..50 {
+        e.process_block(&input);
+    }
+    for _ in 0..200 {
+        e.process_block(&input);
+        tail_energy += energy(&e.stereo_out[0]) + energy(&e.stereo_out[1]);
+    }
+    assert!(tail_energy < 1e-6, "tail should be silent with reverb_amount=0: {tail_energy}");
+}

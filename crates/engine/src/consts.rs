@@ -25,20 +25,55 @@ pub const SH_W_NORM: f32 = 3.544_907_7;
 
 pub const DEFAULT_RT60_DB: f32 = -15.0;
 pub const DEFAULT_REVERB_LOW_HZ: f32 = 600.0;
+/// Native reference value (bit-verified): -100 dB at 600 Hz acts as
+/// a near brick-wall HPF. Designed for an SDK where each application
+/// reconfigures per scene; useless for a plugin where the user just
+/// wants to hear reverb. See `PLUGIN_REVERB_LOW_DB`.
 pub const DEFAULT_REVERB_LOW_DB: f32 = -100.0;
 pub const DEFAULT_REVERB_HIGH_HZ: f32 = 3500.0;
 pub const DEFAULT_REVERB_HIGH_DB: f32 = -20.0;
 pub const DEFAULT_DIFFUSION_COEF: f32 = 0.69;
 
+/// Plugin-friendly shelf gains. Deviates from spec so the reverb is
+/// audible out of the box. See development notes "spec discrepancies".
+pub const PLUGIN_REVERB_LOW_DB: f32 = -20.0;
+pub const PLUGIN_REVERB_HIGH_DB: f32 = -6.0;
+
 /// Per-cell calibration multiplier applied at HRTF load time, per
 /// §13. IEEE-754 single `0x3FCAE148 = 1.5850000381`.
 pub const HRTF_LOAD_GAIN: f32 = 1.585;
 
-pub const DIFFUSER_DELAY_SECONDS: [f32; 8] = [
-    0.0203, 0.0244, 0.0316, 0.0273, 0.0229, 0.0293, 0.0135, 0.0191,
+/// 10-stage Schroeder diffuser delays. Not bit-verified against the
+/// reference (native synthesises these at runtime); see §4 and
+/// development notes "spec discrepancies" — this is a faithful-sounding
+/// substitute, architecturally correct, modal fingerprint differs.
+pub const DIFFUSER_DELAY_SECONDS: [f32; NUM_DIFFUSERS] = [
+    0.0203, 0.0244, 0.0316, 0.0273, 0.0229, 0.0293, 0.0135, 0.0191, 0.0181, 0.0257,
 ];
-pub const FDN_DELAY_SECONDS: [f32; 8] = [
-    0.1531, 0.2103, 0.1278, 0.2569, 0.1748, 0.1924, 0.125, 0.2200,
+/// 8-line FDN core delays. Same caveat as the diffuser table above.
+pub const FDN_DELAY_SECONDS: [f32; FDN_SIZE] = [
+    0.1531, 0.2103, 0.1278, 0.2569, 0.1748, 0.1924, 0.1250, 0.2200,
+];
+
+/// Per-line FDN reverb send weights (§13). Pairs 1:1 with
+/// `REVERB_OUTPUT_DIRS`.
+pub const REV_SEND_GAINS: [f32; FDN_SIZE] = [0.32, 0.55, 0.55, 0.41, 0.45, 0.19, 0.32, 0.63];
+/// Per-line FDN reverb decode weights (§13).
+pub const REV_DECODE_GAINS: [f32; FDN_SIZE] = [1.0, 1.0, 0.7, 1.0, 0.9, 0.9, 0.7, 1.0];
+
+/// 8 reverb output directions, converted from §13's
+/// `(+x = right, +y = forward, +z = up)` frame into engine-native
+/// `(+X = forward, +Y = left, +Z = up)` via `(X, Y, Z) = (y, -x, z)`.
+/// Used to SH-encode the FDN outputs into the ambisonic bus every block.
+pub const REVERB_OUTPUT_DIRS: [[f32; 3]; FDN_SIZE] = [
+    [ 0.610_319_3,  -0.616_944_43,  0.496_880_1],
+    [-0.610_319_3,  -0.616_944_43, -0.496_880_1],
+    [ 0.611_301_24,  0.615_971_57,  0.496_880_1],
+    [-0.611_301_24,  0.615_971_57, -0.496_880_1],
+    [ 0.867_768_6,  -0.009_369_127, 0.496_880_1],
+    [ 0.0,          -0.867_819_2,  -0.496_880_1],
+    [ 0.001_382_0,   0.867_818_1,   0.496_880_1],
+    [-0.867_768_6,  -0.009_369_127,-0.496_880_1],
 ];
 
 #[cfg(test)]
