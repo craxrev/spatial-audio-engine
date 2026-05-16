@@ -294,7 +294,17 @@ fn update_lp_coeffs(src: &mut Source, total: f32, sample_rate: u32) {
 
 /// §5 SH-encoder wrapper without the curve override (M3 uses the
 /// `1/max(r, 0.1)` fallback). `rel` is in the listener-local frame.
+///
+/// Near-field omni blend: across `r ∈ [0, NEAR_OMNI_M]` the
+/// directional SH channels (everything but W) fade linearly to 0.
+/// Without this, a near-listener source's encoded direction lights
+/// every higher-order channel and any tiny L/R asymmetry in the
+/// bundled HRTF for that bearing gets amplified by the near-field
+/// dist_atten cap into a strong stereo bias. W (omni) energy is
+/// unaffected so loudness stays continuous.
 fn compute_sh_gains(rel: Vec3, out: &mut [f32; NUM_AMBI]) {
+    const NEAR_OMNI_M: f32 = 0.1;
+
     let r = rel.length();
     let (unit, dist_atten) = if r > 0.0 {
         (rel * (1.0 / r), 1.0 / r.max(0.1))
@@ -303,8 +313,12 @@ fn compute_sh_gains(rel: Vec3, out: &mut [f32; NUM_AMBI]) {
     };
     sh_basis_n3d_into(unit, out);
     let scale = dist_atten * SH_W_NORM;
-    for v in out.iter_mut() {
+    let omni_blend = (r / NEAR_OMNI_M).clamp(0.0, 1.0);
+    for (i, v) in out.iter_mut().enumerate() {
         *v *= scale;
+        if i != 0 {
+            *v *= omni_blend;
+        }
     }
 }
 
