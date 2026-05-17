@@ -120,8 +120,10 @@ impl Engine {
     /// §13 / §12 step 10: install the W-channel binauralizer
     /// (decoder_post). `filter_a` and `filter_b` are the raw bundled
     /// blobs (2865 f32 each, little-endian). Returns `true` on success.
+    /// IRs are resampled from their authored rate to the engine's
+    /// `sample_rate` at load time (§11).
     pub fn load_w_binauralizer(&mut self, filter_a: &[u8], filter_b: &[u8]) -> bool {
-        match WBinauralizer::from_bytes(filter_a, filter_b) {
+        match WBinauralizer::from_bytes_at(filter_a, filter_b, self.sample_rate) {
             Some(wb) => { self.w_binauralizer = Some(wb); true }
             None => false,
         }

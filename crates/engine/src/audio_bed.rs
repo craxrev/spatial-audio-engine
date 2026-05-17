@@ -218,6 +218,7 @@ impl AudioBed {
                 if coef == 0.0 {
                     continue;
                 }
+                #[allow(clippy::needless_range_loop)]
                 for i in 0..BLOCK_SIZE {
                     bus_ch[i] += coef * src[i];
                 }
@@ -278,6 +279,7 @@ mod tests {
         let bed = AudioBed::new(BedFormat::Stereo);
         let mut bus = ambi_zero();
         let mut inputs: Vec<[f32; BLOCK_SIZE]> = vec![[0.0; BLOCK_SIZE]; 2];
+        #[allow(clippy::needless_range_loop)]
         for i in 0..BLOCK_SIZE {
             inputs[0][i] =  1.0;
             inputs[1][i] = -1.0;
@@ -300,6 +302,7 @@ mod tests {
         bed.encode(&inputs, Quat::IDENTITY, &mut bus);
         let w = channel_energy(&bus[0]);
         assert!(w > 0.0);
+        #[allow(clippy::needless_range_loop)]
         for k in 1..NUM_AMBI {
             assert!(
                 channel_energy(&bus[k]) < w * 1e-6,
@@ -326,6 +329,7 @@ mod tests {
         // unrotated case.
         let bed = AudioBed::new(BedFormat::Stereo);
         let mut inputs: Vec<[f32; BLOCK_SIZE]> = vec![[0.0; BLOCK_SIZE]; 2];
+        #[allow(clippy::needless_range_loop)]
         for i in 0..BLOCK_SIZE {
             inputs[0][i] =  1.0;
             inputs[1][i] = -1.0;

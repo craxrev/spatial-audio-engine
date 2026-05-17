@@ -12,7 +12,7 @@ pub struct HrtfDecoder {
 
 impl HrtfDecoder {
     pub fn new(hrtf: &Hrtf) -> Self {
-        let mut conv = TimeDomainConvEngine::new(NUM_AMBI, OUTPUT_CHANNELS, 128);
+        let mut conv = TimeDomainConvEngine::new(NUM_AMBI, OUTPUT_CHANNELS, hrtf.ir_len());
         for ambi in 0..NUM_AMBI {
             for ear in 0..OUTPUT_CHANNELS {
                 conv.set_ir(ambi, ear, hrtf.ir(ambi, ear));

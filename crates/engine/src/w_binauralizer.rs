@@ -13,7 +13,10 @@
 
 use crate::consts::{BLOCK_SIZE, OUTPUT_CHANNELS};
 use crate::conv::{ConvolutionEngine, TimeDomainConvEngine};
+use crate::resampler::resample;
 
+/// Authored sample rate of the bundled `hrtf_post_filter_{a,b}.bin`.
+pub const W_BIN_SOURCE_RATE: u32 = 48_000;
 pub const W_BINAURALIZER_TAPS: usize = 2865;
 
 pub struct WBinauralizer {
@@ -25,14 +28,31 @@ impl WBinauralizer {
     /// Each blob is exactly `W_BINAURALIZER_TAPS * 4` bytes
     /// (little-endian f32) — directly from `hrtf_post_filter_a.bin` /
     /// `hrtf_post_filter_b.bin`. Returns `None` on size mismatch.
+    /// Assumes the runtime rate equals the authored rate; for other
+    /// rates use `from_bytes_at`.
     pub fn from_bytes(filter_a: &[u8], filter_b: &[u8]) -> Option<Self> {
+        Self::from_bytes_at(filter_a, filter_b, W_BIN_SOURCE_RATE)
+    }
+
+    /// Like `from_bytes` but resamples the two IRs to `target_rate`
+    /// before installing.
+    pub fn from_bytes_at(
+        filter_a: &[u8],
+        filter_b: &[u8],
+        target_rate: u32,
+    ) -> Option<Self> {
         let expected = W_BINAURALIZER_TAPS * 4;
         if filter_a.len() != expected || filter_b.len() != expected {
             return None;
         }
-        let ir_a = decode_le_f32(filter_a);
-        let ir_b = decode_le_f32(filter_b);
-        let mut conv = TimeDomainConvEngine::new(1, OUTPUT_CHANNELS, W_BINAURALIZER_TAPS);
+        let mut ir_a = decode_le_f32(filter_a);
+        let mut ir_b = decode_le_f32(filter_b);
+        if target_rate != W_BIN_SOURCE_RATE {
+            ir_a = resample(&ir_a, W_BIN_SOURCE_RATE, target_rate);
+            ir_b = resample(&ir_b, W_BIN_SOURCE_RATE, target_rate);
+        }
+        let ir_len = ir_a.len();
+        let mut conv = TimeDomainConvEngine::new(1, OUTPUT_CHANNELS, ir_len);
         conv.set_ir(0, 0, &ir_a);
         conv.set_ir(0, 1, &ir_b);
         Some(Self { conv })

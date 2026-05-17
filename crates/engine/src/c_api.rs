@@ -383,7 +383,8 @@ pub unsafe extern "C" fn engine_load_main_hrtf(
         return false;
     }
     let slice = unsafe { slice::from_raw_parts(bytes, len) };
-    match Hrtf::load_from_bytes(slice) {
+    let rate = e.sample_rate;
+    match Hrtf::load_from_bytes_at(slice, rate) {
         Ok(hrtf) => {
             e.load_main_hrtf(&hrtf);
             true

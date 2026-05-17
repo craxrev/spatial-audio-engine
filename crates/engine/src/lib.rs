@@ -14,6 +14,7 @@ pub mod externalizer;
 pub mod hrtf;
 pub mod math;
 pub mod ramp;
+pub mod resampler;
 pub mod reverb;
 pub mod sh;
 pub mod source;

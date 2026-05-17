@@ -259,3 +259,20 @@ fn w_binauralizer_adds_envelopment_to_stereo_out() {
     assert!(on_energy > off_energy,
             "W-binauralizer should add stereo energy: off={off_energy}, on={on_energy}");
 }
+
+#[test]
+fn engine_at_44_1k_resamples_hrtf_and_w_bin() {
+    // Run the full pipeline at 44.1 kHz: the HRTF and W-binauralizer
+    // IRs must auto-resample at load. Output should still be non-zero.
+    let mut e = Engine::new(44_100, 1);
+    let hrtf = Hrtf::load_from_bytes_at(HRTF_BYTES, 44_100).expect("hrtf load");
+    e.load_main_hrtf(&hrtf);
+    assert!(e.load_w_binauralizer(W_BIN_A_BYTES, W_BIN_B_BYTES));
+    e.set_source_active(0, true);
+    e.set_source_position(0, 5.0, 0.0, 0.0);
+    e.set_source_gain(0, 1.0);
+    settle(&mut e, &dc_input(), 16);
+    let l = energy(&e.stereo_out[0]);
+    let r = energy(&e.stereo_out[1]);
+    assert!(l > 0.0 && r > 0.0, "44.1k pipeline silent: L={l}, R={r}");
+}
