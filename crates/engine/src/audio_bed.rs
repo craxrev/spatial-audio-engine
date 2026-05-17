@@ -15,6 +15,7 @@
 use crate::consts::{BLOCK_SIZE, NUM_AMBI, SH_W_NORM};
 use crate::math::{Quat, Vec3};
 use crate::sh::sh_basis_n3d_into;
+use crate::sh_rotation::ShRotation;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -28,6 +29,12 @@ pub enum BedFormat {
     Surround7_1    = 6,
     Surround7_1_2  = 7,
     Surround7_1_4  = 8,
+    /// 1st-order ambisonic input (W, Y, Z, X) — 4 channels.
+    Ambisonics1st  = 9,
+    /// 2nd-order ambisonic input — 9 channels.
+    Ambisonics2nd  = 10,
+    /// 3rd-order ambisonic input — 16 channels.
+    Ambisonics3rd  = 11,
 }
 
 impl BedFormat {
@@ -42,6 +49,9 @@ impl BedFormat {
             6 => Some(BedFormat::Surround7_1),
             7 => Some(BedFormat::Surround7_1_2),
             8 => Some(BedFormat::Surround7_1_4),
+            9 => Some(BedFormat::Ambisonics1st),
+            10 => Some(BedFormat::Ambisonics2nd),
+            11 => Some(BedFormat::Ambisonics3rd),
             _ => None,
         }
     }
@@ -57,7 +67,17 @@ impl BedFormat {
             BedFormat::Surround7_1    => 8,
             BedFormat::Surround7_1_2  => 10,
             BedFormat::Surround7_1_4  => 12,
+            BedFormat::Ambisonics1st  => 4,
+            BedFormat::Ambisonics2nd  => 9,
+            BedFormat::Ambisonics3rd  => 16,
         }
+    }
+
+    pub fn is_ambisonic(self) -> bool {
+        matches!(
+            self,
+            BedFormat::Ambisonics1st | BedFormat::Ambisonics2nd | BedFormat::Ambisonics3rd
+        )
     }
 }
 
@@ -147,6 +167,12 @@ fn speakers_for(format: BedFormat) -> Vec<Speaker> {
             v.push(spk(-150.0, 30.0));
             v
         }
+
+        // Ambisonic formats don't use speaker directions; the
+        // encode path branches via `BedFormat::is_ambisonic()`.
+        BedFormat::Ambisonics1st
+        | BedFormat::Ambisonics2nd
+        | BedFormat::Ambisonics3rd => vec![],
     }
 }
 
@@ -158,6 +184,11 @@ pub struct AudioBed {
     /// ramps in §6.5 don't apply to the bed; if smoothing is needed
     /// later add a Ramp here.
     pub gain: f32,
+
+    /// Cached prev rotation matrix for the §12 ambisonic-bed
+    /// crossfade. Starts at identity, updated each block from the
+    /// previous target.
+    prev_rot: ShRotation,
 }
 
 impl AudioBed {
@@ -167,6 +198,7 @@ impl AudioBed {
             speakers: speakers_for(format),
             headlocked: false,
             gain: 1.0,
+            prev_rot: ShRotation::identity(),
         }
     }
 
@@ -175,19 +207,23 @@ impl AudioBed {
     }
 
     pub fn channel_count(&self) -> usize {
-        self.speakers.len()
+        self.format.channel_count()
     }
 
     /// Encode bed channels into the ambisonic bus. `inputs.len()`
     /// must match the configured channel count or the call is a no-op
     /// (matches spec §12 step 6 `format_match` guard).
     pub fn encode(
-        &self,
+        &mut self,
         inputs: &[[f32; BLOCK_SIZE]],
         listener_quat: Quat,
         ambi_bus: &mut [[f32; BLOCK_SIZE]],
     ) {
-        if inputs.len() != self.speakers.len() || self.gain == 0.0 {
+        if inputs.len() != self.channel_count() || self.gain == 0.0 {
+            return;
+        }
+        if self.format.is_ambisonic() {
+            self.encode_ambisonic(inputs, listener_quat, ambi_bus);
             return;
         }
         let inv = listener_quat.conjugate();
@@ -225,6 +261,53 @@ impl AudioBed {
             }
         }
     }
+
+    /// §12 step 6 ambisonic branch. Each input channel is already an
+    /// SH coefficient (ACN ordering). We apply the listener rotation
+    /// (passive: `quat⁻¹`) to keep the bed world-locked, crossfading
+    /// from the previous block's rotation to this block's rotation
+    /// across the 128 samples to hide zipper noise.
+    fn encode_ambisonic(
+        &mut self,
+        inputs: &[[f32; BLOCK_SIZE]],
+        listener_quat: Quat,
+        ambi_bus: &mut [[f32; BLOCK_SIZE]],
+    ) {
+        let target_rot = if self.headlocked {
+            ShRotation::identity()
+        } else {
+            ShRotation::from_quat(listener_quat.conjugate())
+        };
+
+        let n_ch = inputs.len();
+        let g = self.gain;
+        let mut in_buf = [0.0_f32; NUM_AMBI];
+        let mut out_prev = [0.0_f32; NUM_AMBI];
+        let mut out_target = [0.0_f32; NUM_AMBI];
+
+        #[allow(clippy::needless_range_loop)]
+        for i in 0..BLOCK_SIZE {
+            for (ch, src) in inputs.iter().enumerate().take(n_ch) {
+                in_buf[ch] = src[i];
+            }
+            // Unused higher-order channels (e.g. for 1st-order input
+            // with NUM_AMBI = 16) stay zero from a previous iteration.
+            for ch in n_ch..NUM_AMBI {
+                in_buf[ch] = 0.0;
+            }
+
+            self.prev_rot.apply(&in_buf, &mut out_prev);
+            target_rot.apply(&in_buf, &mut out_target);
+
+            let t = (i as f32) / (BLOCK_SIZE as f32);
+            let one_m_t = 1.0 - t;
+            for (k, bus_ch) in ambi_bus.iter_mut().enumerate() {
+                bus_ch[i] += g * (one_m_t * out_prev[k] + t * out_target[k]);
+            }
+        }
+
+        self.prev_rot = target_rot;
+    }
 }
 
 #[cfg(test)]
@@ -259,7 +342,7 @@ mod tests {
     #[test]
     fn mono_bed_lights_w_and_x() {
         // Mono bed has one speaker at front (+X) → W and X lit, Y and Z zero.
-        let bed = AudioBed::new(BedFormat::Mono);
+        let mut bed = AudioBed::new(BedFormat::Mono);
         let mut bus = ambi_zero();
         bed.encode(&dc_channels(1, 1.0), Quat::IDENTITY, &mut bus);
         let w = channel_energy(&bus[0]);
@@ -276,7 +359,7 @@ mod tests {
         // is mirrored, but two channels with the same DC input
         // accumulate non-zero Y if their signals differ. Use opposite
         // signs to exercise the L/R asymmetry.
-        let bed = AudioBed::new(BedFormat::Stereo);
+        let mut bed = AudioBed::new(BedFormat::Stereo);
         let mut bus = ambi_zero();
         let mut inputs: Vec<[f32; BLOCK_SIZE]> = vec![[0.0; BLOCK_SIZE]; 2];
         #[allow(clippy::needless_range_loop)]
@@ -295,7 +378,7 @@ mod tests {
     fn lfe_only_lights_w() {
         // 5.1 with the LFE channel only (index 3): should only light
         // the W channel of the ambi bus.
-        let bed = AudioBed::new(BedFormat::Surround5_1);
+        let mut bed = AudioBed::new(BedFormat::Surround5_1);
         let mut bus = ambi_zero();
         let mut inputs: Vec<[f32; BLOCK_SIZE]> = vec![[0.0; BLOCK_SIZE]; 6];
         inputs[3] = [1.0; BLOCK_SIZE]; // LFE only
@@ -313,12 +396,81 @@ mod tests {
 
     #[test]
     fn channel_count_mismatch_is_noop() {
-        let bed = AudioBed::new(BedFormat::Surround5_1);
+        let mut bed = AudioBed::new(BedFormat::Surround5_1);
         let mut bus = ambi_zero();
         bed.encode(&dc_channels(2, 1.0), Quat::IDENTITY, &mut bus); // wrong count
         for ch in &bus {
             assert!(ch.iter().all(|v| *v == 0.0));
         }
+    }
+
+    // ----- M14 ambisonic-bed tests -----
+
+    #[test]
+    fn ambisonic_channel_counts() {
+        assert_eq!(BedFormat::Ambisonics1st.channel_count(), 4);
+        assert_eq!(BedFormat::Ambisonics2nd.channel_count(), 9);
+        assert_eq!(BedFormat::Ambisonics3rd.channel_count(), 16);
+        assert!(BedFormat::Ambisonics1st.is_ambisonic());
+        assert!(!BedFormat::Stereo.is_ambisonic());
+    }
+
+    #[test]
+    fn ambisonic_identity_listener_passes_through() {
+        // 1st-order input with identity listener: bed should appear
+        // directly in ambi_bus[0..4], unchanged after rotation.
+        let mut bed = AudioBed::new(BedFormat::Ambisonics1st);
+        let mut bus = ambi_zero();
+        let mut inputs: Vec<[f32; BLOCK_SIZE]> = vec![[0.0; BLOCK_SIZE]; 4];
+        // Put W=1, Y=0.5, Z=-0.25, X=0.75 across the block.
+        #[allow(clippy::needless_range_loop)]
+        for i in 0..BLOCK_SIZE {
+            inputs[0][i] =  1.0;   // W
+            inputs[1][i] =  0.5;   // Y
+            inputs[2][i] = -0.25;  // Z
+            inputs[3][i] =  0.75;  // X
+        }
+        bed.encode(&inputs, Quat::IDENTITY, &mut bus);
+        // After the crossfade settles (last few samples), output ≈ input
+        // for the 4 input channels and ≈ 0 for the higher-order channels.
+        let i = BLOCK_SIZE - 1;
+        assert!((bus[0][i] - 1.0).abs()   < 1e-3);
+        assert!((bus[1][i] - 0.5).abs()   < 1e-3);
+        assert!((bus[2][i] - (-0.25)).abs()< 1e-3);
+        assert!((bus[3][i] - 0.75).abs()  < 1e-3);
+        #[allow(clippy::needless_range_loop)]
+        for k in 4..NUM_AMBI {
+            assert!(bus[k][i].abs() < 1e-3, "non-input channel {k} = {}", bus[k][i]);
+        }
+    }
+
+    #[test]
+    fn ambisonic_world_locked_rotates_under_listener() {
+        // 1st-order input: pure Y (m=-1, ACN[1]). With listener
+        // rotated +90° about Z, the listener-frame encoding moves
+        // a world-Y source into listener-+X (i.e. directly in front
+        // of the now-left-facing listener). So bus[1] (Y) ≈ 0 and
+        // bus[3] (X) ≈ +1.
+        let mut bed = AudioBed::new(BedFormat::Ambisonics1st);
+        let mut inputs: Vec<[f32; BLOCK_SIZE]> = vec![[0.0; BLOCK_SIZE]; 4];
+        #[allow(clippy::needless_range_loop)]
+        for i in 0..BLOCK_SIZE {
+            inputs[1][i] = 1.0; // Y channel only
+        }
+        let s = core::f32::consts::FRAC_PI_4.sin();
+        let c = core::f32::consts::FRAC_PI_4.cos();
+        let q = Quat::new(c, 0.0, 0.0, s);
+
+        let mut bus = ambi_zero();
+        // Run twice to settle the prev/target crossfade.
+        bed.encode(&inputs, q, &mut bus);
+        let mut bus = ambi_zero();
+        bed.encode(&inputs, q, &mut bus);
+
+        let i = BLOCK_SIZE - 1;
+        // After settling: input Y should map to encoding-frame -X.
+        assert!(bus[1][i].abs() < 0.05, "Y leaks through: {}", bus[1][i]);
+        assert!(bus[3][i] > 0.5, "X expected positive-large: {}", bus[3][i]);
     }
 
     #[test]
@@ -327,7 +479,7 @@ mod tests {
         // becomes (-60° relative). With anti-phase L/R, the +Y
         // component of the encoded bus should flip sign vs the
         // unrotated case.
-        let bed = AudioBed::new(BedFormat::Stereo);
+        let mut bed = AudioBed::new(BedFormat::Stereo);
         let mut inputs: Vec<[f32; BLOCK_SIZE]> = vec![[0.0; BLOCK_SIZE]; 2];
         #[allow(clippy::needless_range_loop)]
         for i in 0..BLOCK_SIZE {

@@ -17,6 +17,7 @@ pub mod ramp;
 pub mod resampler;
 pub mod reverb;
 pub mod sh;
+pub mod sh_rotation;
 pub mod source;
 pub mod w_binauralizer;
 

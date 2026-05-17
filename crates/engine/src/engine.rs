@@ -342,7 +342,7 @@ impl Engine {
 
         // §12 step 6: audio bed → ambi_bus. Bed does NOT feed the
         // reverb input bus (spec note in §12 step 6).
-        if let Some(bed) = self.audio_bed.as_ref() {
+        if let Some(bed) = self.audio_bed.as_mut() {
             bed.encode(bed_inputs, self.listener.quat, &mut self.ambi_bus);
         }
 
