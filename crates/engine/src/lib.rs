@@ -12,7 +12,6 @@ pub mod distance;
 pub mod engine;
 pub mod externalizer;
 pub mod hrtf;
-pub mod legacy_post_decoder;
 pub mod math;
 pub mod ramp;
 pub mod resampler;

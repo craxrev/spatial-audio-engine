@@ -364,40 +364,6 @@ pub unsafe extern "C" fn engine_load_w_binauralizer(
     e.load_w_binauralizer(a, b)
 }
 
-/// §17 install the v0.4 legacy post-decoder. `bytes` is the
-/// 8,192-byte `hrtf_post_legacy_v04.bin` blob (4 cells × 512 f32 taps).
-/// Returns `true` on success.
-///
-/// # Safety
-/// `engine` must be valid; `bytes` must point to `len` readable bytes.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn engine_load_legacy_post_decoder(
-    engine: *mut Engine,
-    bytes: *const c_uchar,
-    len: usize,
-) -> bool {
-    let Some(e) = (unsafe { engine.as_mut() }) else { return false; };
-    if bytes.is_null() { return false; }
-    let slice = unsafe { slice::from_raw_parts(bytes, len) };
-    e.load_legacy_post_decoder(slice)
-}
-
-/// §17 post-decoder mode: `false` (default) = v0.5 W-binauralizer
-/// adds to stereo_out; `true` = v0.4 cross-channel coloration
-/// replaces stereo_out.
-///
-/// # Safety
-/// `engine` must be valid.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn engine_set_legacy_post_enabled(
-    engine: *mut Engine,
-    enabled: bool,
-) {
-    if let Some(e) = unsafe { engine.as_mut() } {
-        e.set_legacy_post_enabled(enabled);
-    }
-}
-
 /// Install the main HRTF decoder from a 16,384-byte buffer matching
 /// `data/hrtf_decoder_native.bin`. Returns `true` on success.
 ///

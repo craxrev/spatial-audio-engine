@@ -66,7 +66,6 @@ private:
     juce::Label      directPathLabel_;
     juce::Slider     extCharSlider_;
     juce::Label      extCharLabel_;
-    juce::ToggleButton legacyPostButton_ { "Legacy post-decoder (v0.4)" };
 
     juce::ToggleButton stereoBypassButton_  { "Stereo bypass" };
     juce::ToggleButton aimAtListenerButton_ { "Aim at listener" };
@@ -90,7 +89,6 @@ private:
     std::unique_ptr<SliderAttachment> extAmountAttachment_;
     std::unique_ptr<SliderAttachment> extCharAttachment_;
     std::unique_ptr<ButtonAttachment> stereoBypassAttachment_;
-    std::unique_ptr<ButtonAttachment> legacyPostAttachment_;
     std::unique_ptr<ButtonAttachment> aimAttachment_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SpatialAudioEditor)

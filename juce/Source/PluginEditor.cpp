@@ -1158,29 +1158,23 @@ SpatialAudioEditor::SpatialAudioEditor(SpatialAudioProcessor& p)
     extCharSlider_.setTooltip("Externalizer tilt EQ (0..100, 50 = neutral). Below 50 = brighter; above 50 = darker.");
     extCharAttachment_ = std::make_unique<SliderAttachment>(p.apvts, "externalizer_character", extCharSlider_);
 
-    legacyPostButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(0xffbbbbbb));
-    legacyPostButton_.setTooltip("Use the v0.4 cross-channel coloration filter instead of the v0.5 W-binauralizer.");
-    addAndMakeVisible(legacyPostButton_);
-    legacyPostAttachment_ = std::make_unique<ButtonAttachment>(p.apvts, "legacy_post", legacyPostButton_);
-
     // Advanced disclosure starts collapsed.
     auto setAdvVisible = [this](bool v) {
         directPathLabel_.setVisible(v);
         directPathSlider_.setVisible(v);
         extCharLabel_.setVisible(v);
         extCharSlider_.setVisible(v);
-        legacyPostButton_.setVisible(v);
         advancedHeader_.setVisible(v);
     };
     setAdvVisible(false);
 
-    advancedButton_.setTooltip("Show / hide additional source parameters (Direct, Ext. Character, Legacy post-decoder).");
+    advancedButton_.setTooltip("Show / hide additional source parameters (Direct, Ext. Character).");
     advancedButton_.setButtonText("Advanced " + kGlyphDown);
     advancedButton_.onClick = [this, setAdvVisible] {
         advancedOpen_ = !advancedOpen_;
         advancedButton_.setButtonText("Advanced " + (advancedOpen_ ? kGlyphUp : kGlyphDown));
         setAdvVisible(advancedOpen_);
-        setSize(580, advancedOpen_ ? 808 : 760);
+        setSize(580, advancedOpen_ ? 784 : 760);
     };
     addAndMakeVisible(advancedButton_);
 
@@ -1209,7 +1203,6 @@ void SpatialAudioEditor::resetAllParams()
         "dist_a", "dist_a_db", "dist_b", "dist_b_db",
         "dist_c", "dist_c_db", "dist_d",
         "position_mode", "rendering_mode",
-        "legacy_post",
         "aim_at_listener",
     };
     for (auto* id : ids)
@@ -1320,8 +1313,6 @@ void SpatialAudioEditor::resized()
         advancedHeader_.setBounds(headerRect());
         layoutPairedRow(area, 22, directPathLabel_, directPathSlider_,
                                   extCharLabel_, extCharSlider_);
-        legacyPostButton_.setBounds(area.removeFromTop(22));
-        area.removeFromTop(2);
     }
 
 }

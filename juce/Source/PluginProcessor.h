@@ -95,7 +95,6 @@ private:
     std::atomic<float>* pDistD_     = nullptr;
     std::atomic<float>* pPosMode_   = nullptr;
     std::atomic<float>* pRenderMode_= nullptr;
-    std::atomic<float>* pLegacyPost_= nullptr;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SpatialAudioProcessor)
 };

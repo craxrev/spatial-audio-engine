@@ -93,18 +93,6 @@ void engine_set_source_distance_curve(
 // data/hrtf_decoder_native.bin. Returns true on success.
 bool engine_load_main_hrtf(Engine* engine, const uint8_t* bytes, size_t len);
 
-// §17 v0.4 legacy post-decoder. Loads 4 cells × 512-tap time-domain
-// f32 IRs from data/hrtf_post_legacy_v04.bin (8,192 bytes total).
-// Returns true on success. Mode is independently toggled with
-// engine_set_legacy_post_enabled.
-bool engine_load_legacy_post_decoder(
-    Engine* engine, const uint8_t* bytes, size_t len);
-
-// §17 post-decoder mode toggle. false (default) = v0.5
-// W-binauralizer adds to stereo_out; true = v0.4 cross-channel
-// coloration replaces stereo_out.
-void engine_set_legacy_post_enabled(Engine* engine, bool enabled);
-
 // §13 W-channel binauralizer (decoder_post). Loads two flat 2865-tap
 // f32 IRs (hrtf_post_filter_a.bin → left, hrtf_post_filter_b.bin →
 // right). Each blob must be exactly 11,460 bytes. Returns true on

@@ -14,7 +14,6 @@ set(RUST_INCLUDE_DIR "${REPO_ROOT}/crates/engine/include")
 set(HRTF_BIN              "${REPO_ROOT}/data/hrtf_decoder_native.bin")
 set(HRTF_POST_A_BIN       "${REPO_ROOT}/data/hrtf_post_filter_a.bin")
 set(HRTF_POST_B_BIN       "${REPO_ROOT}/data/hrtf_post_filter_b.bin")
-set(HRTF_POST_LEGACY_BIN  "${REPO_ROOT}/data/hrtf_post_legacy_v04.bin")
 
 # --- Rust engine staticlib ------------------------------------------------
 
@@ -78,7 +77,6 @@ juce_add_binary_data(SpatialAudioEngineResources
         "${HRTF_BIN}"
         "${HRTF_POST_A_BIN}"
         "${HRTF_POST_B_BIN}"
-        "${HRTF_POST_LEGACY_BIN}"
 )
 
 target_sources(SpatialAudioEngine PRIVATE
