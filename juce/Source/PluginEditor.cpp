@@ -911,6 +911,12 @@ SpatialAudioEditor::SpatialAudioEditor(SpatialAudioProcessor& p)
     stereoBypassAttachment_ =
         std::make_unique<ButtonAttachment>(p.apvts, "rendering_mode", stereoBypassButton_);
 
+    legacyPostButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(0xffbbbbbb));
+    legacyPostButton_.setTooltip("Use the v0.4 cross-channel coloration filter instead of the v0.5 W-binauralizer. The v0.4 post-decoder REPLACES the stereo intermediate with a 2×2 cross-feed; v0.5 ADDS a diffuse envelopment layer. Different audible character; pick by taste or to match a legacy reference.");
+    addAndMakeVisible(legacyPostButton_);
+    legacyPostAttachment_ =
+        std::make_unique<ButtonAttachment>(p.apvts, "legacy_post", legacyPostButton_);
+
     resetButton_.setTooltip("Reset all parameters to defaults.");
     resetButton_.onClick = [this] { resetAllParams(); };
     addAndMakeVisible(resetButton_);
@@ -921,7 +927,7 @@ SpatialAudioEditor::SpatialAudioEditor(SpatialAudioProcessor& p)
     aimAttachment_ = std::make_unique<ButtonAttachment>(
         p.apvts, "aim_at_listener", aimAtListenerButton_);
 
-    setSize(560, 1030);
+    setSize(560, 1054);
 }
 
 SpatialAudioEditor::~SpatialAudioEditor() = default;
@@ -942,6 +948,7 @@ void SpatialAudioEditor::resetAllParams()
         "dist_a", "dist_a_db", "dist_b", "dist_b_db",
         "dist_c", "dist_c_db", "dist_d",
         "position_mode", "rendering_mode",
+        "legacy_post",
         "aim_at_listener",
     };
     for (auto* id : ids)
@@ -987,6 +994,7 @@ void SpatialAudioEditor::resized()
     layoutSlider(row(24), distAdBLabel_,      distAdBSlider_);
     layoutSlider(row(24), distALabel_,        distASlider_);
     stereoBypassButton_.setBounds(row(24));
+    legacyPostButton_.setBounds(row(24));
     {
         auto r = row(24);
         distPresetLabel_.setBounds(r.removeFromLeft(80));

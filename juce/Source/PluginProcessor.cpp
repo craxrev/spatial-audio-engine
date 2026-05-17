@@ -194,6 +194,9 @@ SpatialAudioProcessor::makeParameterLayout()
         juce::ParameterID{"rendering_mode", 1}, "Stereo bypass", false));
 
     layout.add(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID{"legacy_post", 1}, "Legacy post-decoder (v0.4)", false));
+
+    layout.add(std::make_unique<juce::AudioParameterBool>(
         juce::ParameterID{"aim_at_listener", 1}, "Aim at listener", true));
 
     return layout;
@@ -240,6 +243,7 @@ SpatialAudioProcessor::SpatialAudioProcessor()
     pDistD_     = apvts.getRawParameterValue("dist_d");
     pPosMode_   = apvts.getRawParameterValue("position_mode");
     pRenderMode_= apvts.getRawParameterValue("rendering_mode");
+    pLegacyPost_= apvts.getRawParameterValue("legacy_post");
 
     setLatencySamples(ENGINE_BLOCK);
 }
@@ -276,6 +280,13 @@ void SpatialAudioProcessor::prepareToPlay(double sampleRate, int /*samplesPerBlo
         static_cast<size_t>(SpatialAudioBinary::hrtf_post_filter_a_binSize),
         reinterpret_cast<const uint8_t*>(SpatialAudioBinary::hrtf_post_filter_b_bin),
         static_cast<size_t>(SpatialAudioBinary::hrtf_post_filter_b_binSize));
+
+    // §17 legacy v0.4 post-decoder (loaded but disabled by default —
+    // user toggles via the "Legacy post-decoder (v0.4)" checkbox).
+    engine_load_legacy_post_decoder(
+        engine_,
+        reinterpret_cast<const uint8_t*>(SpatialAudioBinary::hrtf_post_legacy_v04_bin),
+        static_cast<size_t>(SpatialAudioBinary::hrtf_post_legacy_v04_binSize));
 
     engine_set_source_active(engine_, 0, true);
 
@@ -357,6 +368,8 @@ void SpatialAudioProcessor::applyParametersToEngine()
         (uint8_t) juce::roundToInt(pPosMode_->load()));
     engine_set_source_rendering_mode(engine_, 0,
         (uint8_t) juce::roundToInt(pRenderMode_->load()));
+
+    engine_set_legacy_post_enabled(engine_, pLegacyPost_->load() > 0.5f);
 }
 
 void SpatialAudioProcessor::processOneEngineBlock()

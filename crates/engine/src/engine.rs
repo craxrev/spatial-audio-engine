@@ -16,6 +16,7 @@ use crate::decoder::HrtfDecoder;
 use crate::distance::DistanceModel;
 use crate::externalizer::Externalizer;
 use crate::hrtf::Hrtf;
+use crate::legacy_post_decoder::LegacyPostDecoder;
 use crate::math::{Quat, Vec3};
 use crate::reverb::ReverbCore;
 use crate::sh::sh_basis_n3d_into;
@@ -55,6 +56,10 @@ pub struct Engine {
     decoder: Option<HrtfDecoder>,
     w_binauralizer: Option<WBinauralizer>,
     pub audio_bed: Option<AudioBed>,
+    legacy_post_decoder: Option<LegacyPostDecoder>,
+    /// §17 post-decoder mode: `false` = v0.5 W-binauralizer (default),
+    /// `true` = v0.4 legacy 2×2 cross-channel coloration.
+    pub legacy_post_enabled: bool,
 }
 
 impl Engine {
@@ -87,7 +92,28 @@ impl Engine {
             decoder: None,
             w_binauralizer: None,
             audio_bed: None,
+            legacy_post_decoder: None,
+            legacy_post_enabled: false,
         }
+    }
+
+    /// §17 install the v0.4 legacy post-decoder. Loads a 2-in × 2-out
+    /// time-domain filter set (4 cells × 512 taps) from the bundled
+    /// `hrtf_post_legacy_v04.bin` blob. Returns `true` on success.
+    /// Mode is independently selected via `set_legacy_post_enabled`.
+    pub fn load_legacy_post_decoder(&mut self, bytes: &[u8]) -> bool {
+        match LegacyPostDecoder::from_bytes(bytes) {
+            Some(d) => { self.legacy_post_decoder = Some(d); true }
+            None => false,
+        }
+    }
+
+    /// §17 toggle: `false` = v0.5 W-binauralizer (default, adds to
+    /// stereo_out); `true` = v0.4 cross-channel coloration (replaces
+    /// stereo_out). The selected post-decoder only runs if its filter
+    /// has been loaded.
+    pub fn set_legacy_post_enabled(&mut self, enabled: bool) {
+        self.legacy_post_enabled = enabled;
     }
 
     /// §2.6 audio bed. `format = NoInput` removes the bed; any other
@@ -376,9 +402,16 @@ impl Engine {
         // internally when disabled and ramped to zero.
         self.externalizer.process(&mut self.stereo_out);
 
-        // §13 / §12 step 10: W-channel binauralizer adds a diffuse
-        // envelopment layer derived from the W (omni) ambisonic channel.
-        if let Some(wb) = self.w_binauralizer.as_mut() {
+        // §12 step 10 / §17 post-decoder. Pick exactly one:
+        //   v0.5 (default): W-binauralizer ADDS a diffuse envelopment
+        //                   layer derived from the W ambisonic channel.
+        //   v0.4 (legacy):  2×2 cross-channel coloration REPLACES the
+        //                   stereo intermediate.
+        if self.legacy_post_enabled {
+            if let Some(d) = self.legacy_post_decoder.as_mut() {
+                d.process_replace(&mut self.stereo_out);
+            }
+        } else if let Some(wb) = self.w_binauralizer.as_mut() {
             wb.process_add(&self.ambi_bus[0], &mut self.stereo_out);
         }
 

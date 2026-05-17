@@ -51,6 +51,7 @@ private:
     juce::ComboBox   distPresetBox_;
     juce::Label      distPresetLabel_;
     juce::ToggleButton stereoBypassButton_ { "Stereo bypass" };
+    juce::ToggleButton legacyPostButton_   { "Legacy post-decoder (v0.4)" };
     juce::Slider     distASlider_;
     juce::Label      distALabel_;
     juce::Slider     distAdBSlider_;
@@ -90,6 +91,7 @@ private:
     std::unique_ptr<SliderAttachment> distCdBAttachment_;
     std::unique_ptr<SliderAttachment> distDAttachment_;
     std::unique_ptr<ButtonAttachment> stereoBypassAttachment_;
+    std::unique_ptr<ButtonAttachment> legacyPostAttachment_;
     std::unique_ptr<ButtonAttachment> aimAttachment_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SpatialAudioEditor)
