@@ -56,7 +56,8 @@ private:
     // reports it via engine_block_size().
     static constexpr int ENGINE_BLOCK = 128;
     static constexpr int RING_CAP = 8192;
-    std::vector<float> inMonoRing_;
+    std::vector<float> inLRing_;
+    std::vector<float> inRRing_;
     std::vector<float> outLRing_;
     std::vector<float> outRRing_;
     int inWrite_ = 0, inRead_ = 0;
@@ -92,6 +93,8 @@ private:
     std::atomic<float>* pDistC_     = nullptr;
     std::atomic<float>* pDistCdB_   = nullptr;
     std::atomic<float>* pDistD_     = nullptr;
+    std::atomic<float>* pPosMode_   = nullptr;
+    std::atomic<float>* pRenderMode_= nullptr;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SpatialAudioProcessor)
 };

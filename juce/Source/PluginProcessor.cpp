@@ -184,6 +184,15 @@ SpatialAudioProcessor::makeParameterLayout()
                                     R{0.0f, 300.0f, 0.01f},  100.0f,
                                     Attrs().withStringFromValueFunction(fmtMeters)));
 
+    // §2.4 / §2.5: source position + rendering modes. position_mode
+    // stays as a choice so the future 3D view (Phase 5) can repurpose
+    // it; rendering_mode is binary so a checkbox is plenty.
+    layout.add(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID{"position_mode", 1}, "Position mode",
+        juce::StringArray{"World", "Relative (head-locked)"}, 0));
+    layout.add(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID{"rendering_mode", 1}, "Stereo bypass", false));
+
     layout.add(std::make_unique<juce::AudioParameterBool>(
         juce::ParameterID{"aim_at_listener", 1}, "Aim at listener", true));
 
@@ -195,7 +204,8 @@ SpatialAudioProcessor::SpatialAudioProcessor()
         .withInput("Input",  juce::AudioChannelSet::stereo(), true)
         .withOutput("Output", juce::AudioChannelSet::stereo(), true)),
       apvts(*this, nullptr, "params", makeParameterLayout()),
-      inMonoRing_(RING_CAP, 0.0f),
+      inLRing_(RING_CAP, 0.0f),
+      inRRing_(RING_CAP, 0.0f),
       outLRing_(RING_CAP, 0.0f),
       outRRing_(RING_CAP, 0.0f)
 {
@@ -228,6 +238,8 @@ SpatialAudioProcessor::SpatialAudioProcessor()
     pDistC_     = apvts.getRawParameterValue("dist_c");
     pDistCdB_   = apvts.getRawParameterValue("dist_c_db");
     pDistD_     = apvts.getRawParameterValue("dist_d");
+    pPosMode_   = apvts.getRawParameterValue("position_mode");
+    pRenderMode_= apvts.getRawParameterValue("rendering_mode");
 
     setLatencySamples(ENGINE_BLOCK);
 }
@@ -260,7 +272,8 @@ void SpatialAudioProcessor::prepareToPlay(double sampleRate, int /*samplesPerBlo
 
     // Reset rings; prime output with one engine-block of zeros to
     // cover the chunker's 128-sample latency.
-    std::fill(inMonoRing_.begin(),  inMonoRing_.end(),  0.0f);
+    std::fill(inLRing_.begin(),     inLRing_.end(),     0.0f);
+    std::fill(inRRing_.begin(),     inRRing_.end(),     0.0f);
     std::fill(outLRing_.begin(),    outLRing_.end(),    0.0f);
     std::fill(outRRing_.begin(),    outRRing_.end(),    0.0f);
     inWrite_ = inRead_ = 0;
@@ -330,19 +343,26 @@ void SpatialAudioProcessor::applyParametersToEngine()
         pDistB_->load(), bLin,
         pDistC_->load(), cLin,
         pDistD_->load());
+
+    engine_set_source_position_mode(engine_, 0,
+        (uint8_t) juce::roundToInt(pPosMode_->load()));
+    engine_set_source_rendering_mode(engine_, 0,
+        (uint8_t) juce::roundToInt(pRenderMode_->load()));
 }
 
 void SpatialAudioProcessor::processOneEngineBlock()
 {
-    float block[ENGINE_BLOCK];
+    // Per-source 2×128 slab: [ch0_0..ch0_127, ch1_0..ch1_127].
+    float slab[ENGINE_BLOCK * 2];
     for (int i = 0; i < ENGINE_BLOCK; ++i)
     {
-        block[i] = inMonoRing_[(size_t) inRead_];
+        slab[i]                = inLRing_[(size_t) inRead_];
+        slab[ENGINE_BLOCK + i] = inRRing_[(size_t) inRead_];
         inRead_ = (inRead_ + 1) % RING_CAP;
     }
 
     float outL[ENGINE_BLOCK], outR[ENGINE_BLOCK];
-    engine_process_block(engine_, block, 1, outL, outR);
+    engine_process_block(engine_, slab, 1, outL, outR);
 
     for (int i = 0; i < ENGINE_BLOCK; ++i)
     {
@@ -368,12 +388,18 @@ void SpatialAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce:
     const int numIn = juce::jmin(buffer.getNumChannels(), 2);
     const float* inL = buffer.getReadPointer(0);
     const float* inR = numIn >= 2 ? buffer.getReadPointer(1) : nullptr;
+    // Tell the engine whether this source is mono or stereo so the
+    // §6.7 stereo-object path runs only when both channels are live.
+    if (engine_ != nullptr)
+        engine_set_source_input_channel_count(engine_, 0, inR != nullptr ? 2 : 1);
 
-    // Fold to mono and push into the input ring.
+    // Push host audio into the per-channel input rings (stereo
+    // pass-through; mono sources get the same data into ch1 but the
+    // engine ignores it via input_channel_count = 1).
     for (int i = 0; i < n; ++i)
     {
-        const float mono = inR != nullptr ? 0.5f * (inL[i] + inR[i]) : inL[i];
-        inMonoRing_[(size_t) inWrite_] = mono;
+        inLRing_[(size_t) inWrite_] = inL[i];
+        inRRing_[(size_t) inWrite_] = inR != nullptr ? inR[i] : inL[i];
         inWrite_ = (inWrite_ + 1) % RING_CAP;
     }
 

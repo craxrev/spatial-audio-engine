@@ -13,14 +13,14 @@ fn energy(buf: &[f32]) -> f32 {
     buf.iter().map(|v| v * v).sum()
 }
 
-fn settle(e: &mut Engine, input: &[[f32; BLOCK_SIZE]], n: usize) {
+fn settle(e: &mut Engine, input: &[[[f32; BLOCK_SIZE]; 2]], n: usize) {
     for _ in 0..n {
         e.process_block(input);
     }
 }
 
-fn dc_input() -> Vec<[f32; BLOCK_SIZE]> {
-    vec![[1.0_f32; BLOCK_SIZE]]
+fn dc_input() -> Vec<[[f32; BLOCK_SIZE]; 2]> {
+    vec![[[1.0_f32; BLOCK_SIZE]; 2]]
 }
 
 fn build_engine_with_source_at(x: f32, y: f32, z: f32) -> Engine {
@@ -185,13 +185,13 @@ fn reverb_tail_reaches_stereo_out() {
     e.set_source_reverb_send(0, 1.0);
     e.set_reverb_amount(1.0);
 
-    let mut input = [[0.0_f32; BLOCK_SIZE]; 1];
-    input[0][0] = 1.0;
+    let mut input = [[[0.0_f32; BLOCK_SIZE]; 2]; 1];
+    input[0][0][0] = 1.0;
     e.process_block(&input);
 
     // Run 200 silent blocks (~533ms at 48k) so the impulse propagates
     // into and back out of the FDN delays and HRTF convolution.
-    input[0].fill(0.0);
+    input[0][0].fill(0.0); input[0][1].fill(0.0);
     let mut tail_energy = 0.0_f32;
     for _ in 0..200 {
         e.process_block(&input);
@@ -208,11 +208,11 @@ fn reverb_amount_zero_silences_tail() {
     e.set_source_reverb_send(0, 1.0);
     e.set_reverb_amount(0.0);
 
-    let mut input = [[0.0_f32; BLOCK_SIZE]; 1];
-    input[0][0] = 1.0;
+    let mut input = [[[0.0_f32; BLOCK_SIZE]; 2]; 1];
+    input[0][0][0] = 1.0;
     e.process_block(&input);
 
-    input[0].fill(0.0);
+    input[0][0].fill(0.0); input[0][1].fill(0.0);
     let mut tail_energy = 0.0_f32;
     // Skip 50 blocks past the direct-path HRTF settle, then measure.
     for _ in 0..50 {

@@ -903,6 +903,14 @@ SpatialAudioEditor::SpatialAudioEditor(SpatialAudioProcessor& p)
                "Silence anchor: source is fully silent beyond this distance.",
                distDAttachment_);
 
+    // §2.5 rendering_mode as a checkbox: off = Spatial (full pipeline),
+    // on = Stereo bypass (host stereo → output, skip all spatial DSP).
+    stereoBypassButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(0xffbbbbbb));
+    stereoBypassButton_.setTooltip("Skip all spatial DSP — pass host stereo straight to output. HRTF, cone, occlusion, distance curve, reverb send are all bypassed; only Gain still applies.");
+    addAndMakeVisible(stereoBypassButton_);
+    stereoBypassAttachment_ =
+        std::make_unique<ButtonAttachment>(p.apvts, "rendering_mode", stereoBypassButton_);
+
     resetButton_.setTooltip("Reset all parameters to defaults.");
     resetButton_.onClick = [this] { resetAllParams(); };
     addAndMakeVisible(resetButton_);
@@ -913,7 +921,7 @@ SpatialAudioEditor::SpatialAudioEditor(SpatialAudioProcessor& p)
     aimAttachment_ = std::make_unique<ButtonAttachment>(
         p.apvts, "aim_at_listener", aimAtListenerButton_);
 
-    setSize(560, 1000);
+    setSize(560, 1030);
 }
 
 SpatialAudioEditor::~SpatialAudioEditor() = default;
@@ -933,6 +941,7 @@ void SpatialAudioEditor::resetAllParams()
         "externalizer_amount", "externalizer_character",
         "dist_a", "dist_a_db", "dist_b", "dist_b_db",
         "dist_c", "dist_c_db", "dist_d",
+        "position_mode", "rendering_mode",
         "aim_at_listener",
     };
     for (auto* id : ids)
@@ -977,6 +986,7 @@ void SpatialAudioEditor::resized()
     layoutSlider(row(24), distBLabel_,        distBSlider_);
     layoutSlider(row(24), distAdBLabel_,      distAdBSlider_);
     layoutSlider(row(24), distALabel_,        distASlider_);
+    stereoBypassButton_.setBounds(row(24));
     {
         auto r = row(24);
         distPresetLabel_.setBounds(r.removeFromLeft(80));

@@ -49,11 +49,28 @@ pub struct Source {
     /// path attenuation and the reverb send distance attenuation.
     pub distance_model: DistanceModel,
 
+    /// §2.4 `positionMode`. 0 = world (engine applies listener-inverse
+    /// transform); 1 = relative (`pos` is already in listener frame,
+    /// engine skips the transform — for head-locked / HUD sources).
+    pub position_mode: u8,
+
+    /// §2.5 `renderingMode`. 0 = spatial (full pipeline); 1 = stereo
+    /// bypass (mix straight into stereo output, skip all spatial DSP
+    /// and the reverb send).
+    pub rendering_mode: u8,
+
+    /// §6.7 input channel count. 1 = mono (only `ch0` is read);
+    /// 2 = stereo (both channels SH-encoded at the same position
+    /// sharing per-object state).
+    pub input_channel_count: u8,
+
     // §6.3 1-pole low-pass state. Coefficients are recomputed only
     // when `total = clamp(occl_now + dir_lp_offset, 0, ∞)` changes
     // (either because the occlusion ramp is active or because the
-    // directivity LP offset moved).
-    pub lp_state: f32,
+    // directivity LP offset moved). Two independent states for stereo
+    // input — same coefficients, separate per-channel memory so the
+    // two ears of a stereo object don't bleed through the filter.
+    pub lp_state: [f32; 2],
     pub lp_b0: f32,
     pub lp_a1: f32,
     pub lp_total_last: f32,
@@ -84,7 +101,10 @@ impl Default for Source {
             occlusion: Ramp::new(0.0, OCCLUSION_RAMP_SAMPLES),
             rev_send: Ramp::new(0.0, BLOCK_SIZE as u32),
             distance_model: DistanceModel::default(),
-            lp_state: 0.0,
+            position_mode: 0,
+            rendering_mode: 0,
+            input_channel_count: 1,
+            lp_state: [0.0; 2],
             // total=0 → fc ≈ fs/2 → b0 ≈ 1, a1 ≈ 0 (transparent).
             // First block always recomputes; these are placeholders.
             lp_b0: 1.0,

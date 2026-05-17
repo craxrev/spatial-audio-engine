@@ -205,6 +205,51 @@ pub unsafe extern "C" fn engine_set_externalizer_character(engine: *mut Engine, 
     }
 }
 
+/// §2.4 position_mode (0 = world, 1 = relative/head-locked).
+///
+/// # Safety
+/// `engine` must be a valid pointer from `engine_new`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn engine_set_source_position_mode(
+    engine: *mut Engine,
+    idx: u32,
+    mode: u8,
+) {
+    if let Some(e) = unsafe { engine.as_mut() } {
+        e.set_source_position_mode(idx as usize, mode);
+    }
+}
+
+/// §2.5 rendering_mode (0 = spatial, 1 = stereo bypass).
+///
+/// # Safety
+/// `engine` must be a valid pointer from `engine_new`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn engine_set_source_rendering_mode(
+    engine: *mut Engine,
+    idx: u32,
+    mode: u8,
+) {
+    if let Some(e) = unsafe { engine.as_mut() } {
+        e.set_source_rendering_mode(idx as usize, mode);
+    }
+}
+
+/// §6.7 input channel count (1 = mono, 2 = stereo).
+///
+/// # Safety
+/// `engine` must be a valid pointer from `engine_new`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn engine_set_source_input_channel_count(
+    engine: *mut Engine,
+    idx: u32,
+    count: u8,
+) {
+    if let Some(e) = unsafe { engine.as_mut() } {
+        e.set_source_input_channel_count(idx as usize, count);
+    }
+}
+
 /// §3 4-knot distance curve. Knot gains are linear; caller must
 /// pre-convert dB → linear (`10^(dB/20)`).
 ///
@@ -285,11 +330,13 @@ pub extern "C" fn engine_block_size() -> u32 {
 
 /// Process one 128-sample block.
 ///
-/// `inputs` is `num_sources × 128` interleaved-per-source f32s,
-/// i.e. `inputs[i*128 .. (i+1)*128]` is the mono input for source
-/// `i`. `out_left` and `out_right` receive 128 binaural samples
-/// each (overwritten, not accumulated). Inactive sources are
-/// ignored regardless of input contents.
+/// `inputs` is `num_sources × 2 × 128` source-major f32s. Each
+/// source's 256-float slab is `[ch0_0..ch0_127, ch1_0..ch1_127]`.
+/// Mono sources (input_channel_count = 1) only read the first 128
+/// floats; stereo sources read both halves. `out_left` and
+/// `out_right` receive 128 binaural samples each (overwritten, not
+/// accumulated). Inactive sources are ignored regardless of input
+/// contents.
 ///
 /// # Safety
 /// All pointers must be valid for the indicated lengths.
@@ -308,8 +355,8 @@ pub unsafe extern "C" fn engine_process_block(
     let input_slice = if inputs.is_null() || n == 0 {
         &[][..]
     } else {
-        // SAFETY: caller guarantees `inputs` is valid for `n*128` f32s.
-        unsafe { slice::from_raw_parts(inputs as *const [f32; BLOCK_SIZE], n) }
+        // SAFETY: caller guarantees `inputs` is valid for `n*2*128` f32s.
+        unsafe { slice::from_raw_parts(inputs as *const [[f32; BLOCK_SIZE]; 2], n) }
     };
     e.process_block(input_slice);
     if !out_left.is_null() {
@@ -338,7 +385,7 @@ mod tests {
             engine_set_source_active(e, 0, true);
             engine_set_source_position(e, 0, 5.0, 0.0, 0.0);
             engine_set_source_gain(e, 0, 1.0);
-            let inputs = vec![1.0_f32; BLOCK_SIZE];
+            let inputs = vec![1.0_f32; BLOCK_SIZE * 2];
             let mut l = vec![0.0_f32; BLOCK_SIZE];
             let mut r = vec![0.0_f32; BLOCK_SIZE];
             engine_process_block(e, inputs.as_ptr(), 1, l.as_mut_ptr(), r.as_mut_ptr());

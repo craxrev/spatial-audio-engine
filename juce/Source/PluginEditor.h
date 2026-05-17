@@ -50,6 +50,7 @@ private:
     juce::Label      extCharLabel_;
     juce::ComboBox   distPresetBox_;
     juce::Label      distPresetLabel_;
+    juce::ToggleButton stereoBypassButton_ { "Stereo bypass" };
     juce::Slider     distASlider_;
     juce::Label      distALabel_;
     juce::Slider     distAdBSlider_;
@@ -67,8 +68,9 @@ private:
     juce::TextButton resetButton_ { "Reset" };
     juce::ToggleButton aimAtListenerButton_ { "Aim at listener" };
 
-    using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
-    using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
+    using SliderAttachment   = juce::AudioProcessorValueTreeState::SliderAttachment;
+    using ButtonAttachment   = juce::AudioProcessorValueTreeState::ButtonAttachment;
+    using ComboBoxAttachment = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
     std::unique_ptr<SliderAttachment> gainAttachment_;
     std::unique_ptr<SliderAttachment> occlusionAttachment_;
     std::unique_ptr<SliderAttachment> spreadAttachment_;
@@ -87,6 +89,7 @@ private:
     std::unique_ptr<SliderAttachment> distCAttachment_;
     std::unique_ptr<SliderAttachment> distCdBAttachment_;
     std::unique_ptr<SliderAttachment> distDAttachment_;
+    std::unique_ptr<ButtonAttachment> stereoBypassAttachment_;
     std::unique_ptr<ButtonAttachment> aimAttachment_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SpatialAudioEditor)

@@ -181,6 +181,30 @@ impl Engine {
         self.externalizer.set_character(value);
     }
 
+    /// §2.4 `positionMode` (0 = world, 1 = relative/head-locked).
+    pub fn set_source_position_mode(&mut self, idx: usize, mode: u8) {
+        if let Some(s) = self.sources.get_mut(idx) {
+            if s.position_mode != mode {
+                s.position_mode = mode;
+                s.pos_dirty = true;
+            }
+        }
+    }
+
+    /// §2.5 `renderingMode` (0 = spatial, 1 = stereo bypass).
+    pub fn set_source_rendering_mode(&mut self, idx: usize, mode: u8) {
+        if let Some(s) = self.sources.get_mut(idx) {
+            s.rendering_mode = mode;
+        }
+    }
+
+    /// §6.7 input channel count (1 = mono, 2 = stereo).
+    pub fn set_source_input_channel_count(&mut self, idx: usize, count: u8) {
+        if let Some(s) = self.sources.get_mut(idx) {
+            s.input_channel_count = count.clamp(1, 2);
+        }
+    }
+
     /// §3 distance curve. Knot gains are linear (caller does dB → linear).
     /// Default curve is `(1 m, 0 dB) (12 m, −20 dB) (60 m, −60 dB) (100 m → 0)`.
     /// Setting a new curve marks the source as `pos_dirty` so the SH
@@ -237,12 +261,10 @@ impl Engine {
         }
     }
 
-    /// `inputs[i]` is the mono input for source `i` for this block.
-    /// Inactive sources and any indices past `inputs.len()` are
-    /// skipped. The ambi bus is zeroed at the start of each call.
-    /// If a main HRTF is loaded, `stereo_out` carries the binaural
-    /// decode at end of block; otherwise it is cleared.
-    pub fn process_block(&mut self, inputs: &[[f32; BLOCK_SIZE]]) {
+    /// `inputs[i]` is the 2-channel input slab for source `i` for this
+    /// block (`[ch0, ch1]`; mono sources only read `ch0`). Inactive
+    /// sources and any indices past `inputs.len()` are skipped.
+    pub fn process_block(&mut self, inputs: &[[[f32; BLOCK_SIZE]; 2]]) {
         for ch in &mut self.ambi_bus {
             ch.fill(0.0);
         }
@@ -250,6 +272,11 @@ impl Engine {
 
         for (i, src) in self.sources.iter_mut().enumerate() {
             if !src.active || i >= inputs.len() {
+                continue;
+            }
+            if src.rendering_mode != 0 {
+                // §6.9 stereo bypass: mixed into stereo_out below,
+                // after the spatial pipeline. Skip here.
                 continue;
             }
             process_source(
@@ -262,10 +289,6 @@ impl Engine {
             );
         }
 
-        // §7 / §13: process reverb and spatialise its 8 outputs into the
-        // ambisonic bus at the fixed direction grid, scaled by
-        // `reverb_amount` and per-direction `REV_DECODE_GAINS` (the
-        // latter baked into `rev_sh_bases`).
         if self.reverb_amount > 0.0 {
             let mut rev_outs = [[0.0_f32; BLOCK_SIZE]; FDN_SIZE];
             self.reverb.process(&self.reverb_in_bus, &mut rev_outs);
@@ -295,6 +318,27 @@ impl Engine {
         // §9 externalizer: in-place transform of stereo_out. Skipped
         // internally when disabled and ramped to zero.
         self.externalizer.process(&mut self.stereo_out);
+
+        // §6.9 stereo-bypass sources: mix straight into stereo_out
+        // after externalizer (bypass skips ALL spatial DSP, including
+        // the externalizer per spec §6.9).
+        for (i, src) in self.sources.iter_mut().enumerate() {
+            if !src.active || i >= inputs.len() || src.rendering_mode == 0 {
+                continue;
+            }
+            let slab = &inputs[i];
+            for n in 0..BLOCK_SIZE {
+                let g = src.gain.tick();
+                if src.input_channel_count >= 2 {
+                    self.stereo_out[0][n] += g * slab[0][n];
+                    self.stereo_out[1][n] += g * slab[1][n];
+                } else {
+                    let v = g * slab[0][n];
+                    self.stereo_out[0][n] += v;
+                    self.stereo_out[1][n] += v;
+                }
+            }
+        }
     }
 }
 
@@ -302,13 +346,19 @@ fn process_source(
     src: &mut Source,
     listener: &Listener,
     sample_rate: u32,
-    input: &[f32; BLOCK_SIZE],
+    input: &[[f32; BLOCK_SIZE]; 2],
     ambi_bus: &mut [[f32; BLOCK_SIZE]],
     reverb_in: &mut [f32; BLOCK_SIZE],
 ) {
-    // §6.1 listener-relative position.
-    let delta = src.pos - listener.pos;
-    let new_rel = listener.quat.conjugate().rotate(delta);
+    // §6.1 / §2.4 position_mode. World (0): compute listener-relative
+    // via inverse listener transform. Relative (1): use src.pos as-is,
+    // it's already in listener frame (head-locked / HUD source).
+    let new_rel = if src.position_mode == 0 {
+        let delta = src.pos - listener.pos;
+        listener.quat.conjugate().rotate(delta)
+    } else {
+        src.pos
+    };
     if new_rel != src.rel_pos {
         src.rel_pos = new_rel;
         src.pos_dirty = true;
@@ -345,13 +395,21 @@ fn process_source(
     let n = BLOCK_SIZE as f32;
     let b0 = src.lp_b0;
     let a1 = src.lp_a1;
+    let stereo = src.input_channel_count >= 2;
     for i in 0..BLOCK_SIZE {
-        // §6.3 1-pole LP: y = b0·x + state ; state = y·a1 + b0·x
-        let x = input[i];
-        let y = b0 * x + src.lp_state;
-        src.lp_state = y * a1 + b0 * x;
+        // §6.3 1-pole LP per channel: y = b0·x + state ; state = y·a1 + b0·x
+        let x0 = input[0][i];
+        let y0 = b0 * x0 + src.lp_state[0];
+        src.lp_state[0] = y0 * a1 + b0 * x0;
+        let (y1, used_stereo) = if stereo {
+            let x1 = input[1][i];
+            let y = b0 * x1 + src.lp_state[1];
+            src.lp_state[1] = y * a1 + b0 * x1;
+            (y, true)
+        } else {
+            (0.0_f32, false)
+        };
 
-        // Per-sample ramps.
         let g = src.gain.tick();
         let dg = src.directivity_gain.tick();
         let rs = src.rev_send.tick();
@@ -367,24 +425,37 @@ fn process_source(
                 .zip(src.sh_gains_new.iter())
             {
                 let sh = old + t * (new_ - old);
-                ch[i] += g_direct * sh * y;
+                ch[i] += g_direct * sh * y0;
+                if used_stereo {
+                    ch[i] += g_direct * sh * y1;
+                }
             }
         } else {
             for (ch, &new_) in ambi_bus.iter_mut().zip(src.sh_gains_new.iter()) {
-                ch[i] += g_direct * new_ * y;
+                ch[i] += g_direct * new_ * y0;
+                if used_stereo {
+                    ch[i] += g_direct * new_ * y1;
+                }
             }
         }
 
         // §6.6 reverb send (note: direct_path_gain & directivity are
         // NOT applied here — reverb path is independent of the cone).
+        // Stereo objects mono-sum into the reverb bus.
         if rs > 0.0 {
-            reverb_in[i] += g * rs * reverb_dist_atten * y;
+            let mut mix = y0;
+            if used_stereo {
+                mix += y1;
+            }
+            reverb_in[i] += g * rs * reverb_dist_atten * mix;
         }
     }
 
-    // §6.3 denormal flush.
-    if src.lp_state.abs() < 1.175e-38 {
-        src.lp_state = 0.0;
+    // §6.3 denormal flush for both LP states.
+    for s in &mut src.lp_state {
+        if s.abs() < 1.175e-38 {
+            *s = 0.0;
+        }
     }
 }
 
@@ -464,11 +535,11 @@ mod tests {
     use super::*;
     use core::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
 
-    fn dc_inputs(n: usize, value: f32) -> Vec<[f32; BLOCK_SIZE]> {
-        vec![[value; BLOCK_SIZE]; n]
+    fn dc_inputs(n: usize, value: f32) -> Vec<[[f32; BLOCK_SIZE]; 2]> {
+        vec![[[value; BLOCK_SIZE]; 2]; n]
     }
 
-    fn settle(e: &mut Engine, inputs: &[[f32; BLOCK_SIZE]]) {
+    fn settle(e: &mut Engine, inputs: &[[[f32; BLOCK_SIZE]; 2]]) {
         // Two blocks settles the BLOCK_SIZE-length gain ramp.
         for _ in 0..2 {
             e.process_block(inputs);
@@ -479,7 +550,7 @@ mod tests {
         ch.iter().map(|v| v * v).sum()
     }
 
-    fn settle_occlusion(e: &mut Engine, inputs: &[[f32; BLOCK_SIZE]]) {
+    fn settle_occlusion(e: &mut Engine, inputs: &[[[f32; BLOCK_SIZE]; 2]]) {
         // 1000-sample ramp / 128-sample block → ~8 blocks to fully settle.
         for _ in 0..16 {
             e.process_block(inputs);
@@ -492,7 +563,7 @@ mod tests {
         e.set_source_active(0, true);
         e.set_source_position(0, 5.0, 0.0, 0.0);
         e.set_source_gain(0, 1.0);
-        let inputs: [[f32; BLOCK_SIZE]; 0] = [];
+        let inputs: [[[f32; BLOCK_SIZE]; 2]; 0] = [];
         e.process_block(&inputs);
         for ch in &e.ambi_bus {
             for &v in ch.iter() {
@@ -705,13 +776,15 @@ mod tests {
         let freq = 4000.0_f32;
         let blocks = 32; // covers occlusion ramp + filter settling
 
-        let mut sine_inputs: Vec<[f32; BLOCK_SIZE]> = Vec::with_capacity(blocks);
+        let mut sine_inputs: Vec<[[f32; BLOCK_SIZE]; 2]> = Vec::with_capacity(blocks);
         let mut phase = 0.0_f32;
         let step = 2.0 * PI * freq / sr;
         for _ in 0..blocks {
-            let mut b = [0.0_f32; BLOCK_SIZE];
-            for v in &mut b {
-                *v = phase.sin();
+            let mut b = [[0.0_f32; BLOCK_SIZE]; 2];
+            for i in 0..BLOCK_SIZE {
+                let s = phase.sin();
+                b[0][i] = s;
+                b[1][i] = s;
                 phase += step;
                 if phase > TAU {
                     phase -= TAU;
@@ -794,11 +867,11 @@ mod tests {
         e.set_source_reverb_send(0, 0.0);
         e.set_reverb_amount(1.0);
 
-        let mut input = [[0.0_f32; BLOCK_SIZE]; 1];
-        input[0][0] = 1.0;
+        let mut input = [[[0.0_f32; BLOCK_SIZE]; 2]; 1];
+        input[0][0][0] = 1.0;
         e.process_block(&input);
 
-        input[0].fill(0.0);
+        input[0][0].fill(0.0); input[0][1].fill(0.0);
         for _ in 0..200 {
             e.process_block(&input);
         }
@@ -819,11 +892,11 @@ mod tests {
         e.set_source_reverb_send(0, 1.0);
         e.set_reverb_amount(1.0);
 
-        let mut input = [[0.0_f32; BLOCK_SIZE]; 1];
-        input[0][0] = 1.0;
+        let mut input = [[[0.0_f32; BLOCK_SIZE]; 2]; 1];
+        input[0][0][0] = 1.0;
         e.process_block(&input);
 
-        input[0].fill(0.0);
+        input[0][0].fill(0.0); input[0][1].fill(0.0);
         // Settle through the FDN.
         for _ in 0..150 {
             e.process_block(&input);
@@ -849,14 +922,14 @@ mod tests {
         e.set_source_reverb_send(0, 1.0);
         e.set_reverb_amount(0.0);
 
-        let mut input = [[0.0_f32; BLOCK_SIZE]; 1];
-        input[0][0] = 1.0;
+        let mut input = [[[0.0_f32; BLOCK_SIZE]; 2]; 1];
+        input[0][0][0] = 1.0;
         e.process_block(&input);
 
         // No direct positional energy in Y (source is on +X), and with
         // reverb_amount=0 no reverb energy should reach Y either, so Y
         // stays silent after the gain ramp settles.
-        input[0].fill(0.0);
+        input[0][0].fill(0.0); input[0][1].fill(0.0);
         for _ in 0..150 {
             e.process_block(&input);
         }

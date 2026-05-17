@@ -71,6 +71,15 @@ void engine_set_reverb_amount(Engine* engine, float amount);
 void engine_set_externalizer_amount(Engine* engine, float value);
 void engine_set_externalizer_character(Engine* engine, float value);
 
+// §2.4 position_mode (0 = world, 1 = relative/head-locked).
+void engine_set_source_position_mode(Engine* engine, uint32_t idx, uint8_t mode);
+
+// §2.5 rendering_mode (0 = spatial, 1 = stereo bypass).
+void engine_set_source_rendering_mode(Engine* engine, uint32_t idx, uint8_t mode);
+
+// §6.7 input channel count (1 = mono, 2 = stereo).
+void engine_set_source_input_channel_count(Engine* engine, uint32_t idx, uint8_t count);
+
 // §3 4-knot distance curve. Knot gains are LINEAR (caller does dB → linear).
 // D is the silence anchor (only its distance is needed).
 void engine_set_source_distance_curve(
@@ -86,8 +95,10 @@ bool engine_load_main_hrtf(Engine* engine, const uint8_t* bytes, size_t len);
 
 // Process one 128-sample block.
 //
-// `inputs` is `num_sources * 128` f32s, source-major:
-//   inputs[i*128 .. (i+1)*128] is the mono input for source i.
+// `inputs` is `num_sources * 2 * 128` f32s, source-major. Each
+// source's 256-float slab is [ch0_0..ch0_127, ch1_0..ch1_127].
+// Mono sources only read the first 128 floats; stereo sources read
+// both halves.
 // `out_left` and `out_right` each receive 128 binaural f32s,
 // overwritten (not accumulated).
 //
