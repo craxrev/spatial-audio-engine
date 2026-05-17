@@ -1,6 +1,7 @@
 #include "PluginEditor.h"
 
 #include <cmath>
+#include <limits>
 
 namespace
 {
@@ -16,6 +17,12 @@ const juce::String kGlyphDash = juce::String::fromUTF8("\xE2\x80\x94"); // —
 // JUCE-font coverage than the small variants (U+25BE / U+25B4).
 const juce::String kGlyphDown = juce::String::fromUTF8("\xE2\x96\xBC"); // ▼
 const juce::String kGlyphUp   = juce::String::fromUTF8("\xE2\x96\xB2"); // ▲
+
+// Cached fonts. Avoid heap-allocating a new juce::Font every paint() call
+// — at 30–60 Hz across three custom components this dominates GUI CPU.
+const juce::Font& font9()  { static juce::Font f = juce::Font(juce::FontOptions(9.0f));  return f; }
+const juce::Font& font10() { static juce::Font f = juce::Font(juce::FontOptions(10.0f)); return f; }
+const juce::Font& font11() { static juce::Font f = juce::Font(juce::FontOptions(11.0f)); return f; }
 
 // Native azimuth convention: 0 = front, +90 = left, ±180 = back.
 // Screen y-axis points down, so "front" maps to "up" on screen.
@@ -123,6 +130,7 @@ public:
         : state_(s)
     {
         setMouseCursor(juce::MouseCursor::PointingHandCursor);
+        setBufferedToImage(true);
         startTimerHz(60);
     }
 
@@ -135,55 +143,20 @@ public:
         const float outerR =
             juce::jmin(bounds.getWidth(), bounds.getHeight()) * 0.45f;
 
-        g.fillAll(juce::Colour(0xff141414));
-
-        // Distance rings every 5 m.
-        g.setColour(juce::Colour(0xff2a2a2a));
-        for (float d = 5.0f; d <= kCompassMaxMeters; d += 5.0f)
+        // Cached static background — rings, cardinals, listener head/nose/YOU.
+        // Re-rendered only when the component size changes.
+        if (backgroundImage_.isNull()
+            || backgroundImage_.getWidth()  != juce::jmax(1, getWidth())
+            || backgroundImage_.getHeight() != juce::jmax(1, getHeight()))
         {
-            const float ringR = outerR * (d / kCompassMaxMeters);
-            g.drawEllipse(centre.x - ringR, centre.y - ringR,
-                          2.0f * ringR, 2.0f * ringR, 1.0f);
+            backgroundImage_ = juce::Image(juce::Image::ARGB,
+                                           juce::jmax(1, getWidth()),
+                                           juce::jmax(1, getHeight()),
+                                           true);
+            juce::Graphics bg(backgroundImage_);
+            paintStaticBackground(bg, centre, outerR);
         }
-        g.setColour(juce::Colour(0xff444444));
-        g.drawEllipse(centre.x - outerR, centre.y - outerR,
-                      2.0f * outerR, 2.0f * outerR, 1.5f);
-
-        // Cardinal axes + labels.
-        g.setColour(juce::Colour(0xff262626));
-        g.drawLine(centre.x, centre.y - outerR, centre.x, centre.y + outerR);
-        g.drawLine(centre.x - outerR, centre.y, centre.x + outerR, centre.y);
-
-        g.setColour(juce::Colour(0xff7a7a7a));
-        g.setFont(juce::Font(juce::FontOptions(11.0f)));
-        g.drawText("FRONT", juce::Rectangle<float>(centre.x - 40, centre.y - outerR - 16, 80, 12),
-                   juce::Justification::centred);
-        g.drawText("BACK",  juce::Rectangle<float>(centre.x - 40, centre.y + outerR + 4,  80, 12),
-                   juce::Justification::centred);
-        // LEFT / RIGHT live just *inside* the outer ring — the ring touches
-        // the compass edges, so there's no margin outside it.
-        g.drawText("LEFT",  juce::Rectangle<float>(centre.x - outerR + 6, centre.y - 6, 40, 12),
-                   juce::Justification::centredLeft);
-        g.drawText("RIGHT", juce::Rectangle<float>(centre.x + outerR - 46, centre.y - 6, 40, 12),
-                   juce::Justification::centredRight);
-
-        // Listener head.
-        const juce::Colour headFill (0xff5a82ff);
-        g.setColour(headFill);
-        g.fillEllipse(centre.x - 13.0f, centre.y - 13.0f, 26.0f, 26.0f);
-        juce::Path nose;
-        nose.addTriangle(centre.x - 6.0f, centre.y - 9.0f,
-                         centre.x + 6.0f, centre.y - 9.0f,
-                         centre.x,        centre.y - 18.0f);
-        g.fillPath(nose);
-        g.setColour(juce::Colour(0xff1a2a55));
-        g.drawEllipse(centre.x - 13.0f, centre.y - 13.0f, 26.0f, 26.0f, 1.5f);
-        g.strokePath(nose, juce::PathStrokeType(1.5f));
-        g.setColour(juce::Colour(0xff8aa8ff));
-        g.setFont(juce::Font(juce::FontOptions(10.0f)));
-        g.drawText("YOU",
-                   juce::Rectangle<float>(centre.x - 30.0f, centre.y + 18.0f, 60.0f, 12.0f),
-                   juce::Justification::centred);
+        g.drawImageAt(backgroundImage_, 0, 0);
 
         // Source.
         const float dist = currentDistance();
@@ -258,7 +231,7 @@ public:
         g.drawEllipse(src.x - 8.0f, src.y - 8.0f, 16.0f, 16.0f, 1.5f);
 
         g.setColour(juce::Colour(0xffffb88a));
-        g.setFont(juce::Font(juce::FontOptions(10.0f)));
+        g.setFont(font10());
         const bool above = src.y > bounds.getBottom() - 22.0f;
         const float labelY = above ? src.y - 22.0f : src.y + 10.0f;
         g.drawText("SOURCE",
@@ -267,14 +240,14 @@ public:
 
         // Top-left readouts.
         g.setColour(juce::Colour(0xff9a9a9a));
-        g.setFont(juce::Font(juce::FontOptions(11.0f)));
+        g.setFont(font11());
         const auto info = juce::String("pos: ") + juce::String(dist, 2) + " m  "
                         + juce::String(az, 1) + kGlyphDeg + " (" + azimuthCardinal(az) + ")   yaw: "
                         + juce::String(yaw, 1) + kGlyphDeg;
         g.drawText(info, juce::Rectangle<int>(8, 8, getWidth() - 16, 14),
                    juce::Justification::topLeft);
         g.setColour(juce::Colour(0xff666666));
-        g.setFont(juce::Font(juce::FontOptions(10.0f)));
+        g.setFont(font10());
         // Use ASCII "Cmd" — the U+2318 ⌘ glyph is missing in many fonts.
         const auto hint = juce::String("drag dot to move ") + kGlyphMid + " arrow to aim  "
                         + kGlyphDash + "  hold Cmd to snap";
@@ -333,6 +306,8 @@ private:
 
         const float pyaw  = state_.getRawParameterValue("source_yaw")->load();
         const float poccl = state_.getRawParameterValue("occlusion")->load();
+        const float prevDispYaw  = displayedYaw_;
+        const float prevDispOccl = displayedOcclusion_;
         if (firstTick_)
         {
             displayedYaw_       = pyaw;
@@ -344,7 +319,27 @@ private:
             displayedYaw_       = wrap180(angleLerp(displayedYaw_, pyaw, 0.25f));
             displayedOcclusion_ += (poccl - displayedOcclusion_) * 0.18f;
         }
-        repaint();
+
+        // Conditional repaint: skip when nothing has changed since last
+        // frame. Tracks the 8 contour-shape inputs + 2 smoothed values
+        // + drag state. JUCE's setBufferedToImage cache then reuses the
+        // last rendered buffer for free.
+        const float snap[8] = {
+            currentDistance(),
+            currentAzimuth(),
+            state_.getRawParameterValue("dir_inner_deg") ->load(),
+            state_.getRawParameterValue("dir_outer_deg") ->load(),
+            state_.getRawParameterValue("dir_outer_gain")->load(),
+            state_.getRawParameterValue("dir_outer_lp")  ->load(),
+            state_.getRawParameterValue("gain_db")       ->load(),
+            state_.getRawParameterValue("direct_path_gain")->load(),
+        };
+        bool changed = activeDrag_ != DragTarget::None
+                    || std::abs(displayedYaw_  - prevDispYaw)  > 0.02f
+                    || std::abs(displayedOcclusion_ - prevDispOccl) > 0.001f;
+        for (int i = 0; i < 8; ++i)
+            if (snap[i] != prevSnap_[i]) { prevSnap_[i] = snap[i]; changed = true; }
+        if (changed) repaint();
     }
 
     juce::Point<float> centre() const
@@ -423,7 +418,7 @@ private:
     juce::Path buildAudibilityContour(juce::Point<float> src, float yawDeg, float thresholdLin) const
     {
         juce::Path p;
-        constexpr int N = 128;
+        constexpr int N = 64;
         for (int i = 0; i <= N; ++i)
         {
             const float compassAng = (float) i * (360.0f / (float) N);
@@ -542,11 +537,71 @@ private:
         }
     }
 
+    void resized() override { backgroundImage_ = {}; }
+
+    void paintStaticBackground(juce::Graphics& g,
+                                juce::Point<float> centre,
+                                float outerR) const
+    {
+        g.fillAll(juce::Colour(0xff141414));
+
+        g.setColour(juce::Colour(0xff2a2a2a));
+        for (float d = 5.0f; d <= kCompassMaxMeters; d += 5.0f)
+        {
+            const float ringR = outerR * (d / kCompassMaxMeters);
+            g.drawEllipse(centre.x - ringR, centre.y - ringR,
+                          2.0f * ringR, 2.0f * ringR, 1.0f);
+        }
+        g.setColour(juce::Colour(0xff444444));
+        g.drawEllipse(centre.x - outerR, centre.y - outerR,
+                      2.0f * outerR, 2.0f * outerR, 1.5f);
+
+        g.setColour(juce::Colour(0xff262626));
+        g.drawLine(centre.x, centre.y - outerR, centre.x, centre.y + outerR);
+        g.drawLine(centre.x - outerR, centre.y, centre.x + outerR, centre.y);
+
+        g.setColour(juce::Colour(0xff7a7a7a));
+        g.setFont(font11());
+        g.drawText("FRONT", juce::Rectangle<float>(centre.x - 40, centre.y - outerR - 16, 80, 12),
+                   juce::Justification::centred);
+        g.drawText("BACK",  juce::Rectangle<float>(centre.x - 40, centre.y + outerR + 4,  80, 12),
+                   juce::Justification::centred);
+        g.drawText("LEFT",  juce::Rectangle<float>(centre.x - outerR + 6, centre.y - 6, 40, 12),
+                   juce::Justification::centredLeft);
+        g.drawText("RIGHT", juce::Rectangle<float>(centre.x + outerR - 46, centre.y - 6, 40, 12),
+                   juce::Justification::centredRight);
+
+        g.setColour(juce::Colour(0xff5a82ff));
+        g.fillEllipse(centre.x - 13.0f, centre.y - 13.0f, 26.0f, 26.0f);
+        juce::Path nose;
+        nose.addTriangle(centre.x - 6.0f, centre.y - 9.0f,
+                         centre.x + 6.0f, centre.y - 9.0f,
+                         centre.x,        centre.y - 18.0f);
+        g.fillPath(nose);
+        g.setColour(juce::Colour(0xff1a2a55));
+        g.drawEllipse(centre.x - 13.0f, centre.y - 13.0f, 26.0f, 26.0f, 1.5f);
+        g.strokePath(nose, juce::PathStrokeType(1.5f));
+        g.setColour(juce::Colour(0xff8aa8ff));
+        g.setFont(font10());
+        g.drawText("YOU",
+                   juce::Rectangle<float>(centre.x - 30.0f, centre.y + 18.0f, 60.0f, 12.0f),
+                   juce::Justification::centred);
+    }
+
     juce::AudioProcessorValueTreeState& state_;
     DragTarget activeDrag_ = DragTarget::None;
     float displayedYaw_       = 0.0f;
     float displayedOcclusion_ = 0.0f;
     bool  firstTick_          = true;
+    juce::Image backgroundImage_;
+    float prevSnap_[8] = { std::numeric_limits<float>::quiet_NaN(),
+                            std::numeric_limits<float>::quiet_NaN(),
+                            std::numeric_limits<float>::quiet_NaN(),
+                            std::numeric_limits<float>::quiet_NaN(),
+                            std::numeric_limits<float>::quiet_NaN(),
+                            std::numeric_limits<float>::quiet_NaN(),
+                            std::numeric_limits<float>::quiet_NaN(),
+                            std::numeric_limits<float>::quiet_NaN() };
 };
 
 // ---------------------------------------------------------------------------
@@ -561,7 +616,8 @@ public:
     explicit ElevationStrip(juce::AudioProcessorValueTreeState& s) : state_(s)
     {
         setTooltip("Elevation (position) on the left " + kGlyphMid + " pitch (orientation) on the right");
-        startTimerHz(30);
+        setBufferedToImage(true);
+        startTimerHz(15);
     }
 
     ~ElevationStrip() override { stopTimer(); }
@@ -614,7 +670,17 @@ public:
 private:
     enum class Drag { None, Pos, Pitch };
 
-    void timerCallback() override { repaint(); }
+    void timerCallback() override
+    {
+        const float el  = state_.getRawParameterValue("elevation")->load();
+        const float pt  = state_.getRawParameterValue("source_pitch")->load();
+        if (el != prevEl_ || pt != prevPitch_)
+        {
+            prevEl_    = el;
+            prevPitch_ = pt;
+            repaint();
+        }
+    }
 
     Drag dragTarget(juce::Point<float> p) const
     {
@@ -644,7 +710,7 @@ private:
         g.drawLine(cx - 10.0f, midY, cx + 10.0f, midY, 1.0f);
 
         g.setColour(juce::Colour(0xff7a7a7a));
-        g.setFont(juce::Font(juce::FontOptions(10.0f)));
+        g.setFont(font10());
         g.drawText("UP",
                    juce::Rectangle<float>(col.getX(), col.getY() + 4.0f, col.getWidth(), 12.0f),
                    juce::Justification::centred);
@@ -662,7 +728,7 @@ private:
         g.drawEllipse(cx - 9.0f, h_y - 9.0f, 18.0f, 18.0f, 1.5f);
 
         g.setColour(juce::Colour(0xff9a9a9a));
-        g.setFont(juce::Font(juce::FontOptions(10.0f)));
+        g.setFont(font10());
         g.drawText(juce::String((int) std::round(el)) + kGlyphDeg,
                    juce::Rectangle<float>(col.getX(), botY + 16.0f, col.getWidth(), 12.0f),
                    juce::Justification::centred);
@@ -683,7 +749,7 @@ private:
         g.drawLine(cx - 14.0f, midY, cx + 14.0f, midY, 1.0f);
 
         g.setColour(juce::Colour(0xff7a7a7a));
-        g.setFont(juce::Font(juce::FontOptions(10.0f)));
+        g.setFont(font10());
         g.drawText("TILT",
                    juce::Rectangle<float>(col.getX(), col.getY() + 4.0f, col.getWidth(), 12.0f),
                    juce::Justification::centred);
@@ -722,7 +788,7 @@ private:
         }
 
         g.setColour(juce::Colour(0xff9a9a9a));
-        g.setFont(juce::Font(juce::FontOptions(10.0f)));
+        g.setFont(font10());
         g.drawText(juce::String((int) std::round(pitch)) + kGlyphDeg,
                    juce::Rectangle<float>(col.getX(), botY + 16.0f, col.getWidth(), 12.0f),
                    juce::Justification::centred);
@@ -749,6 +815,8 @@ private:
 
     juce::AudioProcessorValueTreeState& state_;
     Drag activeDrag_ = Drag::None;
+    float prevEl_    = std::numeric_limits<float>::quiet_NaN();
+    float prevPitch_ = std::numeric_limits<float>::quiet_NaN();
 };
 
 // ---------------------------------------------------------------------------
@@ -765,7 +833,8 @@ public:
         : state_(s)
     {
         setTooltip("Distance vs gain curve. Drag A/B/C/D nodes to edit. A is the near-field anchor; D is the silence anchor (distance only).");
-        startTimerHz(30);
+        setBufferedToImage(true);
+        startTimerHz(15);
     }
 
     ~DistanceCurveEditor() override { stopTimer(); }
@@ -794,7 +863,7 @@ public:
 
         // Axis labels.
         g.setColour(juce::Colour(0xff7a7a7a));
-        g.setFont(juce::Font(juce::FontOptions(9.0f)));
+        g.setFont(font9());
         for (int d : {1, 10, 50, 100, 150})
         {
             if ((float) d > DIST_MAX) continue;
@@ -868,7 +937,21 @@ private:
     static constexpr float DB_MIN   = -80.0f;
     static constexpr float DB_MAX   = 6.0f;
 
-    void timerCallback() override { repaint(); }
+    void timerCallback() override
+    {
+        const float vals[7] = {
+            state_.getRawParameterValue("dist_a")   ->load(),
+            state_.getRawParameterValue("dist_a_db")->load(),
+            state_.getRawParameterValue("dist_b")   ->load(),
+            state_.getRawParameterValue("dist_b_db")->load(),
+            state_.getRawParameterValue("dist_c")   ->load(),
+            state_.getRawParameterValue("dist_c_db")->load(),
+            state_.getRawParameterValue("dist_d")   ->load(),
+        };
+        for (int i = 0; i < 7; ++i)
+            if (vals[i] != prevVals_[i]) { prevVals_[i] = vals[i]; dirty_ = true; }
+        if (dirty_) { dirty_ = false; repaint(); }
+    }
 
     juce::Rectangle<float> plotArea() const
     {
@@ -925,7 +1008,7 @@ private:
         g.setColour(juce::Colour(0xff5a2410));
         g.drawEllipse(p.x - r, p.y - r, 2 * r, 2 * r, 1.5f);
         g.setColour(juce::Colour(0xffe8c5a8));
-        g.setFont(juce::Font(juce::FontOptions(10.0f)));
+        g.setFont(font10());
         g.drawText(label,
                    juce::Rectangle<float>(p.x + r + 1, p.y - 6, 14, 12),
                    juce::Justification::centredLeft);
@@ -998,6 +1081,14 @@ private:
 
     juce::AudioProcessorValueTreeState& state_;
     Node activeNode_ = Node::None;
+    float prevVals_[7] = { std::numeric_limits<float>::quiet_NaN(),
+                            std::numeric_limits<float>::quiet_NaN(),
+                            std::numeric_limits<float>::quiet_NaN(),
+                            std::numeric_limits<float>::quiet_NaN(),
+                            std::numeric_limits<float>::quiet_NaN(),
+                            std::numeric_limits<float>::quiet_NaN(),
+                            std::numeric_limits<float>::quiet_NaN() };
+    bool dirty_ = true;
 };
 
 // ---------------------------------------------------------------------------
