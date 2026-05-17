@@ -2,23 +2,24 @@
 //!
 //! Signal flow:
 //! ```text
-//! input → 1-pole LP → 10 Schroeder allpass diffusers → 8-line FDN
-//!                                                          ↓
-//!                                              8 reverb outputs
+//! input → 1-pole LP → 8 Schroeder allpass diffusers (1 per line)
+//!                  → 8-line FDN → 8 reverb outputs
 //! ```
 //!
-//! The FDN core: each block sample, read all 8 delay-line taps, mix
-//! them through an 8×8 Hadamard matrix + 1/√8 normalisation, scale
-//! by per-line RT60 decay, run through a low+high shelf pair for
-//! frequency-dependent damping, and write `(diffused_input + tap)`
-//! back into the delay lines. Outputs are the post-decay-post-shelf
-//! taps and get SH-encoded by the engine at the 8 fixed §13 directions.
+//! Per-line parameters are derived from the bit-verified seed tables
+//! (`SCHROEDER_DELAY_SECONDS`, `FDN_DELAY_SECONDS`) scaled by
+//! `DIFFUSION_COEFFICIENT = 0.69`. The per-line `shelf_decay_s`
+//! budget (= `0.69 · (FDN_seed[i] − Schroeder_seed[i])`) drives both
+//! the diffuser's allpass `g` (via Jot's `g = (1/√2)^(1/T)` formula)
+//! and the shelf gains (low/high passband dB = `shelf_decay_s ×
+//! shelf_dB`). Mid-band decay falls out of broadband diffusion + the
+//! shelves' transition bands.
 
 use crate::biquad::Biquad;
 use crate::consts::{
-    BLOCK_SIZE, DEFAULT_DIFFUSION_COEF, DEFAULT_REVERB_HIGH_HZ, DEFAULT_REVERB_LOW_HZ,
-    DEFAULT_RT60_DB, DIFFUSER_DELAY_SECONDS, FDN_DELAY_SECONDS, FDN_SIZE, NUM_DIFFUSERS,
-    PLUGIN_REVERB_HIGH_DB, PLUGIN_REVERB_LOW_DB, REV_SEND_GAINS,
+    BLOCK_SIZE, DEFAULT_REVERB_HIGH_DB, DEFAULT_REVERB_HIGH_HZ, DEFAULT_REVERB_LOW_DB,
+    DEFAULT_REVERB_LOW_HZ, DIFFUSION_COEFFICIENT, FDN_DELAY_SECONDS, FDN_SIZE, NUM_DIFFUSERS,
+    REV_SEND_GAINS, SCHROEDER_DELAY_SECONDS,
 };
 use crate::diffuser::Diffuser;
 
@@ -65,7 +66,6 @@ impl DelayLine {
 
 struct FdnLine {
     delay: DelayLine,
-    decay_gain: f32,
     shelf_low: Biquad,
     shelf_high: Biquad,
 }
@@ -89,23 +89,27 @@ impl ReverbCore {
         let input_lp_b0 = w * inv;
         let input_lp_a1 = (1.0 - w) * inv;
 
-        // 10 Schroeder allpass diffusers.
+        // 8 Schroeder allpasses paired 1:1 with 8 FDN lines.
         let mut diffusers: Vec<Diffuser> = Vec::with_capacity(NUM_DIFFUSERS);
-        for &sec in DIFFUSER_DELAY_SECONDS.iter() {
-            let n = (sec * fs).round() as usize;
-            diffusers.push(Diffuser::new(n.max(1), DEFAULT_DIFFUSION_COEF));
-        }
-
-        // 8 FDN lines: delay + per-line decay + shelf pair.
         let mut fdn: Vec<FdnLine> = Vec::with_capacity(FDN_SIZE);
-        for &sec in FDN_DELAY_SECONDS.iter() {
-            let n = (sec * fs).round() as usize;
-            let decay_gain = compute_decay_gain(DEFAULT_RT60_DB, sec);
+        for i in 0..FDN_SIZE {
+            let schroeder_seed = SCHROEDER_DELAY_SECONDS[i];
+            let fdn_seed       = FDN_DELAY_SECONDS[i];
+
+            let diff_samples = (DIFFUSION_COEFFICIENT * schroeder_seed * fs).round() as usize;
+            let fdn_samples  = (DIFFUSION_COEFFICIENT * fdn_seed       * fs).round() as usize;
+
+            let shelf_decay_s = DIFFUSION_COEFFICIENT * (fdn_seed - schroeder_seed);
+            let g_jot = (core::f32::consts::FRAC_1_SQRT_2).powf(1.0 / shelf_decay_s);
+
+            let low_db_eff  = shelf_decay_s * DEFAULT_REVERB_LOW_DB;
+            let high_db_eff = shelf_decay_s * DEFAULT_REVERB_HIGH_DB;
+
+            diffusers.push(Diffuser::new(diff_samples.max(1), g_jot));
             fdn.push(FdnLine {
-                delay: DelayLine::new(n.max(1)),
-                decay_gain,
-                shelf_low: Biquad::low_shelf(fs, DEFAULT_REVERB_LOW_HZ, PLUGIN_REVERB_LOW_DB, SHELF_Q),
-                shelf_high: Biquad::high_shelf(fs, DEFAULT_REVERB_HIGH_HZ, PLUGIN_REVERB_HIGH_DB, SHELF_Q),
+                delay: DelayLine::new(fdn_samples.max(1)),
+                shelf_low:  Biquad::low_shelf (fs, DEFAULT_REVERB_LOW_HZ,  low_db_eff,  SHELF_Q),
+                shelf_high: Biquad::high_shelf(fs, DEFAULT_REVERB_HIGH_HZ, high_db_eff, SHELF_Q),
             });
         }
 
@@ -162,7 +166,6 @@ impl ReverbCore {
                 *v *= HADAMARD_NORM;
             }
             for (j, line) in self.fdn.iter_mut().enumerate() {
-                d_vals[j] *= line.decay_gain;
                 d_vals[j] = line.shelf_low.process(d_vals[j]);
                 d_vals[j] = line.shelf_high.process(d_vals[j]);
                 // §13: per-line input weight shapes the per-direction
@@ -174,17 +177,6 @@ impl ReverbCore {
                 outputs[j][i] = d_vals[j];
             }
         }
-    }
-}
-
-/// `decay_gain = 10^(RT60_dB · delay_seconds · 0.05)` per §7.4. Clamp
-/// the dB sum to ≤ −80 dB (i.e. clamp gain to ≥ 0 in practice).
-fn compute_decay_gain(rt60_db: f32, delay_seconds: f32) -> f32 {
-    let db = rt60_db * delay_seconds;
-    if db < -80.0 {
-        0.0
-    } else {
-        10.0_f32.powf(db * 0.05)
     }
 }
 
@@ -226,14 +218,6 @@ mod tests {
     }
 
     #[test]
-    fn decay_gain_matches_rt60_formula() {
-        // RT60_dB = -60 dB after 1s reference: gain after 1s of decay
-        // should be 10^(-60/20) = 0.001.
-        let g = compute_decay_gain(-60.0, 1.0);
-        assert!((g - 0.001).abs() < 1e-6, "{g}");
-    }
-
-    #[test]
     fn impulse_decays_over_time() {
         let mut r = ReverbCore::new(48000);
         let mut input = [0.0_f32; BLOCK_SIZE];
@@ -243,9 +227,9 @@ mod tests {
         r.process(&input, &mut outputs);
         input.fill(0.0);
 
-        // Settle: let the impulse propagate through the FDN (longest
-        // delay is ~12k samples ≈ 96 blocks at 48k).
-        for _ in 0..100 {
+        // Settle: longest delay is ceil(0.69 * 0.2569 * 48k) ≈ 8508
+        // samples ≈ 67 blocks at 48 kHz; double it for safety.
+        for _ in 0..140 {
             r.process(&input, &mut outputs);
         }
 

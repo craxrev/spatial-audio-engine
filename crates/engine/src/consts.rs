@@ -6,7 +6,11 @@ pub const NUM_AMBI: usize = 16;
 pub const OUTPUT_CHANNELS: usize = 2;
 pub const FDN_SIZE: usize = 8;
 pub const LOG2_FDN_SIZE: usize = 3;
-pub const NUM_DIFFUSERS: usize = 10;
+/// One Schroeder allpass per FDN line, no cascade. Bit-verified
+/// against both v0.4 and v0.5 wasms (loop bound = 8, one delay seed
+/// per line). The `3` at engine+0x270 is the Hadamard butterfly
+/// stage count (= log₂(FDN_SIZE)), not a per-line cascade depth.
+pub const NUM_DIFFUSERS: usize = FDN_SIZE;
 
 pub const OCCLUSION_RAMP_SAMPLES: u32 = 1000;
 pub const EXTERNALIZER_RAMP_TIME: f32 = 0.05;
@@ -23,36 +27,35 @@ pub const DB_TO_LINEAR_DIVISOR: f32 = 8.65617;
 // 2 · sqrt(pi)
 pub const SH_W_NORM: f32 = 3.544_907_7;
 
-pub const DEFAULT_RT60_DB: f32 = -15.0;
 pub const DEFAULT_REVERB_LOW_HZ: f32 = 600.0;
-/// Native reference value (bit-verified): -100 dB at 600 Hz acts as
-/// a near brick-wall HPF. Designed for an SDK where each application
-/// reconfigures per scene; useless for a plugin where the user just
-/// wants to hear reverb. See `PLUGIN_REVERB_LOW_DB`.
 pub const DEFAULT_REVERB_LOW_DB: f32 = -100.0;
 pub const DEFAULT_REVERB_HIGH_HZ: f32 = 3500.0;
 pub const DEFAULT_REVERB_HIGH_DB: f32 = -20.0;
-pub const DEFAULT_DIFFUSION_COEF: f32 = 0.69;
 
-/// Plugin-friendly shelf gains. Deviates from spec so the reverb is
-/// audible out of the box. See development notes "spec discrepancies".
-pub const PLUGIN_REVERB_LOW_DB: f32 = -20.0;
-pub const PLUGIN_REVERB_HIGH_DB: f32 = -6.0;
+/// Time-domain scale on Schroeder + FDN delay seeds (also feeds the
+/// per-line shelf_decay budget). Bit-verified `0x3f30a3d7` overwrite
+/// of the initial 1.0 at `engine_ctor:773`. Despite being labelled
+/// "diffusion coefficient", it does NOT operate as the Schroeder
+/// allpass `g` — that one is dynamic per line via Jot's formula.
+pub const DIFFUSION_COEFFICIENT: f32 = 0.69;
 
 /// Per-cell calibration multiplier applied at HRTF load time, per
 /// §13. IEEE-754 single `0x3FCAE148 = 1.5850000381`.
 pub const HRTF_LOAD_GAIN: f32 = 1.585;
 
-/// 10-stage Schroeder diffuser delays. Not bit-verified against the
-/// reference (native synthesises these at runtime); see §4 and
-/// development notes "spec discrepancies" — this is a faithful-sounding
-/// substitute, architecturally correct, modal fingerprint differs.
-pub const DIFFUSER_DELAY_SECONDS: [f32; NUM_DIFFUSERS] = [
-    0.0203, 0.0244, 0.0316, 0.0273, 0.0229, 0.0293, 0.0135, 0.0191, 0.0181, 0.0257,
+/// Schroeder allpass delay-time seeds (seconds). Hardcoded in
+/// `native_engine_ctor` as i32.const float bit patterns. Identical
+/// between v0.4 and v0.5. Sample-count delays computed at runtime as
+/// `round(DIFFUSION_COEFFICIENT * seed * fs)`.
+pub const SCHROEDER_DELAY_SECONDS: [f32; NUM_DIFFUSERS] = [
+    0.020346, 0.024421, 0.031604, 0.027333,
+    0.022904, 0.029291, 0.013458, 0.019123,
 ];
-/// 8-line FDN core delays. Same caveat as the diffuser table above.
+/// FDN core delay-time seeds (seconds). Same provenance as above;
+/// same `round(scale * seed * fs)` runtime conversion.
 pub const FDN_DELAY_SECONDS: [f32; FDN_SIZE] = [
-    0.1531, 0.2103, 0.1278, 0.2569, 0.1748, 0.1924, 0.1250, 0.2200,
+    0.153129, 0.210389, 0.127837, 0.256891,
+    0.174713, 0.192303, 0.125000, 0.219991,
 ];
 
 /// Per-line FDN reverb send weights (§13). Pairs 1:1 with
