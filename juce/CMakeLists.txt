@@ -11,7 +11,9 @@ set(REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/..")
 set(RUST_TARGET_DIR "${REPO_ROOT}/target/release")
 set(RUST_STATIC_LIB "${RUST_TARGET_DIR}/libengine.a")
 set(RUST_INCLUDE_DIR "${REPO_ROOT}/crates/engine/include")
-set(HRTF_BIN "${REPO_ROOT}/data/hrtf_decoder_native.bin")
+set(HRTF_BIN          "${REPO_ROOT}/data/hrtf_decoder_native.bin")
+set(HRTF_POST_A_BIN   "${REPO_ROOT}/data/hrtf_post_filter_a.bin")
+set(HRTF_POST_B_BIN   "${REPO_ROOT}/data/hrtf_post_filter_b.bin")
 
 # --- Rust engine staticlib ------------------------------------------------
 
@@ -67,11 +69,14 @@ juce_add_plugin(SpatialAudioEngine
     COPY_PLUGIN_AFTER_BUILD TRUE
 )
 
-# Bundled HRTF blob as JUCE BinaryData.
+# Bundled HRTF blobs as JUCE BinaryData (main HRTF + §13 W-binauralizer pair).
 juce_add_binary_data(SpatialAudioEngineResources
     HEADER_NAME BinaryData.h
     NAMESPACE   SpatialAudioBinary
-    SOURCES     "${HRTF_BIN}"
+    SOURCES
+        "${HRTF_BIN}"
+        "${HRTF_POST_A_BIN}"
+        "${HRTF_POST_B_BIN}"
 )
 
 target_sources(SpatialAudioEngine PRIVATE

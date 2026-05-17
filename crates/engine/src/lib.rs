@@ -16,6 +16,7 @@ pub mod ramp;
 pub mod reverb;
 pub mod sh;
 pub mod source;
+pub mod w_binauralizer;
 
 #[cfg(feature = "c-api")]
 pub mod c_api;

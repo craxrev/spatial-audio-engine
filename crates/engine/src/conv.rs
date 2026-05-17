@@ -21,29 +21,34 @@ pub trait ConvolutionEngine {
     fn reset(&mut self);
 }
 
-/// Direct-form FIR per cross-cell. IRs are stored time-domain at a
-/// fixed length. Per-input delay line carries the previous block so
-/// taps reaching past the current block read from there.
+/// Direct-form FIR per cross-cell. Supports arbitrary IR length —
+/// for `ir_len ≤ BLOCK_SIZE+1` the history fits inside one block; for
+/// longer IRs (e.g. the M11 W-binauralizer's 2865-tap filters) the
+/// scratch buffer grows accordingly.
 pub struct TimeDomainConvEngine {
     num_inputs: usize,
     num_outputs: usize,
     ir_len: usize,
+    history_len: usize,
     /// Per cross-cell IR, indexed `in_idx * num_outputs + out_idx`.
     irs: Vec<Vec<f32>>,
-    /// Per-input previous block, used as the "history" half of a
-    /// virtual 2×BLOCK_SIZE window.
-    prev_inputs: Vec<[f32; BLOCK_SIZE]>,
+    /// Per-input scratch: `[history(history_len), curr(BLOCK_SIZE)]`,
+    /// total `history_len + BLOCK_SIZE` floats. After each block we
+    /// shift left by `BLOCK_SIZE` so the tail becomes the new history.
+    scratch: Vec<Vec<f32>>,
 }
 
 impl TimeDomainConvEngine {
     pub fn new(num_inputs: usize, num_outputs: usize, ir_len: usize) -> Self {
-        assert!(ir_len <= BLOCK_SIZE, "ir_len must fit in the prev-block window");
+        let history_len = ir_len.saturating_sub(1);
+        let scratch_len = history_len + BLOCK_SIZE;
         Self {
             num_inputs,
             num_outputs,
             ir_len,
+            history_len,
             irs: vec![vec![0.0; ir_len]; num_inputs * num_outputs],
-            prev_inputs: vec![[0.0; BLOCK_SIZE]; num_inputs],
+            scratch: vec![vec![0.0; scratch_len]; num_inputs],
         }
     }
 
@@ -74,43 +79,50 @@ impl ConvolutionEngine for TimeDomainConvEngine {
     ) {
         assert_eq!(inputs.len(), self.num_inputs);
         assert_eq!(outputs.len(), self.num_outputs);
+
+        // Stage current inputs into the tail of each scratch buffer.
+        // Head of scratch (`..history_len`) already holds the last
+        // `history_len` samples from prior blocks.
+        for (s, curr) in self.scratch.iter_mut().zip(inputs.iter()) {
+            s[self.history_len..].copy_from_slice(curr);
+        }
+
         for out in outputs.iter_mut() {
             out.fill(0.0);
         }
 
         // For each output sample n, accumulate over all (in_idx, k):
         //   y[n] += x[in_idx, n - k] * h[in_idx, out_idx, k]
-        // where x at negative offsets comes from prev_inputs.
+        // x is read out of `scratch` (history + current concatenated).
         #[allow(clippy::needless_range_loop)]
         for n in 0..BLOCK_SIZE {
             for (out_idx, out) in outputs.iter_mut().enumerate() {
                 let mut acc = 0.0_f32;
                 for in_idx in 0..self.num_inputs {
                     let ir = &self.irs[in_idx * self.num_outputs + out_idx];
-                    let curr = &inputs[in_idx];
-                    let prev = &self.prev_inputs[in_idx];
+                    let s = &self.scratch[in_idx];
+                    let base = self.history_len + n;
                     for k in 0..self.ir_len {
-                        let x = if n >= k {
-                            curr[n - k]
-                        } else {
-                            prev[BLOCK_SIZE + n - k]
-                        };
-                        acc += x * ir[k];
+                        acc += s[base - k] * ir[k];
                     }
                 }
                 out[n] = acc;
             }
         }
 
-        // Save current inputs as next block's history.
-        for (prev, curr) in self.prev_inputs.iter_mut().zip(inputs.iter()) {
-            prev.copy_from_slice(curr);
+        // Shift scratch left by BLOCK_SIZE: the new history is the
+        // last `history_len` samples of `[old_history + curr]`.
+        for s in self.scratch.iter_mut() {
+            let total = s.len();
+            s.copy_within(BLOCK_SIZE..total, 0);
         }
     }
 
     fn reset(&mut self) {
-        for p in &mut self.prev_inputs {
-            p.fill(0.0);
+        for s in &mut self.scratch {
+            for v in s.iter_mut() {
+                *v = 0.0;
+            }
         }
     }
 }
@@ -204,6 +216,35 @@ mod tests {
             assert!((out[0][i] - input[0][i]).abs() < 1e-6);
             assert!((out[1][i] - input[1][i]).abs() < 1e-6);
         }
+    }
+
+    #[test]
+    fn long_ir_history_spans_multiple_blocks() {
+        // IR of length 300 (> BLOCK_SIZE = 128) with a non-zero tap
+        // at index 200. An impulse at sample 0 of block 1 should
+        // produce non-zero output at sample (200 - 128) = 72 of
+        // block 2 — i.e. the history must reach across two blocks.
+        let ir_len = 300;
+        let mut e = TimeDomainConvEngine::new(1, 1, ir_len);
+        let mut ir = vec![0.0_f32; ir_len];
+        ir[200] = 1.0;
+        e.set_ir(0, 0, &ir);
+
+        let mut block1 = [[0.0_f32; BLOCK_SIZE]; 1];
+        block1[0][0] = 1.0;
+        let mut out1 = [[0.0_f32; BLOCK_SIZE]; 1];
+        e.process(&block1, &mut out1);
+        // Within block 1 the impulse only reaches up to tap 127.
+        assert!(out1[0].iter().all(|v| v.abs() < 1e-6));
+
+        let block2 = [[0.0_f32; BLOCK_SIZE]; 1];
+        let mut out2 = [[0.0_f32; BLOCK_SIZE]; 1];
+        e.process(&block2, &mut out2);
+        // Impulse arrives at sample (200 - 128) = 72 of block 2.
+        assert!((out2[0][72] - 1.0).abs() < 1e-6, "got {}", out2[0][72]);
+        // Surrounding samples should be silent.
+        assert!(out2[0][71].abs() < 1e-6);
+        assert!(out2[0][73].abs() < 1e-6);
     }
 
     #[test]

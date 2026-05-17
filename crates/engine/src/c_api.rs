@@ -294,6 +294,32 @@ pub unsafe extern "C" fn engine_set_source_directivity(
     }
 }
 
+/// §13 / §12 step 10: install the W-channel binauralizer
+/// (decoder_post) from two raw blobs matching
+/// `data/hrtf_post_filter_a.bin` and `_b.bin` (each
+/// `W_BINAURALIZER_TAPS · 4 = 11,460 bytes`). Returns `true` on
+/// success.
+///
+/// # Safety
+/// `engine` must be valid; `filter_a` and `filter_b` must each point
+/// to `filter_a_len` / `filter_b_len` readable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn engine_load_w_binauralizer(
+    engine: *mut Engine,
+    filter_a: *const c_uchar,
+    filter_a_len: usize,
+    filter_b: *const c_uchar,
+    filter_b_len: usize,
+) -> bool {
+    let Some(e) = (unsafe { engine.as_mut() }) else { return false; };
+    if filter_a.is_null() || filter_b.is_null() {
+        return false;
+    }
+    let a = unsafe { slice::from_raw_parts(filter_a, filter_a_len) };
+    let b = unsafe { slice::from_raw_parts(filter_b, filter_b_len) };
+    e.load_w_binauralizer(a, b)
+}
+
 /// Install the main HRTF decoder from a 16,384-byte buffer matching
 /// `data/hrtf_decoder_native.bin`. Returns `true` on success.
 ///

@@ -151,8 +151,10 @@ impl Externalizer {
         self.prev_enabled = self.enabled;
 
         // Process each sample of each channel.
+        #[allow(clippy::needless_range_loop)]
         for ch in 0..OUTPUT_CHANNELS {
             let delay = self.delay_samples[ch];
+            #[allow(clippy::needless_range_loop)]
             for i in 0..BLOCK_SIZE {
                 let x = stereo[ch][i];
 
@@ -300,6 +302,7 @@ mod tests {
                 e.process(&mut s);
             }
             let mut s = [[0.0_f32; BLOCK_SIZE]; OUTPUT_CHANNELS];
+            #[allow(clippy::needless_range_loop)]
             for i in 0..BLOCK_SIZE {
                 let v = if i % 2 == 0 { 0.5 } else { -0.5 };
                 s[0][i] = v;

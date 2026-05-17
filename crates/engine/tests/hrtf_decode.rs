@@ -224,3 +224,38 @@ fn reverb_amount_zero_silences_tail() {
     }
     assert!(tail_energy < 1e-6, "tail should be silent with reverb_amount=0: {tail_energy}");
 }
+
+const W_BIN_A_BYTES: &[u8] = include_bytes!("../../../data/hrtf_post_filter_a.bin");
+const W_BIN_B_BYTES: &[u8] = include_bytes!("../../../data/hrtf_post_filter_b.bin");
+
+#[test]
+fn w_binauralizer_adds_envelopment_to_stereo_out() {
+    // Compare stereo output energy with and without the W-binauralizer
+    // loaded. With it, the diffuse-field layer adds energy on top.
+    let hrtf = Hrtf::load_from_bytes(HRTF_BYTES).unwrap();
+
+    let make_engine = |with_wbin: bool| {
+        let mut e = Engine::new(48000, 1);
+        e.load_main_hrtf(&hrtf);
+        if with_wbin {
+            assert!(e.load_w_binauralizer(W_BIN_A_BYTES, W_BIN_B_BYTES));
+        }
+        e.set_source_active(0, true);
+        e.set_source_position(0, 5.0, 0.0, 0.0);
+        e.set_source_gain(0, 1.0);
+        e
+    };
+
+    let input = dc_input();
+    let mut e_off = make_engine(false);
+    let mut e_on  = make_engine(true);
+
+    settle(&mut e_off, &input, 32);
+    settle(&mut e_on,  &input, 32);
+
+    let off_energy = energy(&e_off.stereo_out[0]) + energy(&e_off.stereo_out[1]);
+    let on_energy  = energy(&e_on.stereo_out[0])  + energy(&e_on.stereo_out[1]);
+
+    assert!(on_energy > off_energy,
+            "W-binauralizer should add stereo energy: off={off_energy}, on={on_energy}");
+}

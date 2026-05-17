@@ -93,6 +93,15 @@ void engine_set_source_distance_curve(
 // data/hrtf_decoder_native.bin. Returns true on success.
 bool engine_load_main_hrtf(Engine* engine, const uint8_t* bytes, size_t len);
 
+// §13 W-channel binauralizer (decoder_post). Loads two flat 2865-tap
+// f32 IRs (hrtf_post_filter_a.bin → left, hrtf_post_filter_b.bin →
+// right). Each blob must be exactly 11,460 bytes. Returns true on
+// success.
+bool engine_load_w_binauralizer(
+    Engine* engine,
+    const uint8_t* filter_a, size_t filter_a_len,
+    const uint8_t* filter_b, size_t filter_b_len);
+
 // Process one 128-sample block.
 //
 // `inputs` is `num_sources * 2 * 128` f32s, source-major. Each

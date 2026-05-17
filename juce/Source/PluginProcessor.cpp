@@ -268,6 +268,15 @@ void SpatialAudioProcessor::prepareToPlay(double sampleRate, int /*samplesPerBlo
         reinterpret_cast<const uint8_t*>(SpatialAudioBinary::hrtf_decoder_native_bin),
         static_cast<size_t>(SpatialAudioBinary::hrtf_decoder_native_binSize));
 
+    // §13 W-channel binauralizer (decoder_post): adds a diffuse-field
+    // envelopment layer derived from the W (omni) ambisonic channel.
+    engine_load_w_binauralizer(
+        engine_,
+        reinterpret_cast<const uint8_t*>(SpatialAudioBinary::hrtf_post_filter_a_bin),
+        static_cast<size_t>(SpatialAudioBinary::hrtf_post_filter_a_binSize),
+        reinterpret_cast<const uint8_t*>(SpatialAudioBinary::hrtf_post_filter_b_bin),
+        static_cast<size_t>(SpatialAudioBinary::hrtf_post_filter_b_binSize));
+
     engine_set_source_active(engine_, 0, true);
 
     // Reset rings; prime output with one engine-block of zeros to

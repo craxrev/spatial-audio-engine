@@ -19,6 +19,7 @@ use crate::math::{Quat, Vec3};
 use crate::reverb::ReverbCore;
 use crate::sh::sh_basis_n3d_into;
 use crate::source::Source;
+use crate::w_binauralizer::WBinauralizer;
 
 #[derive(Clone, Debug)]
 pub struct Listener {
@@ -51,6 +52,7 @@ pub struct Engine {
     reverb: ReverbCore,
     externalizer: Externalizer,
     decoder: Option<HrtfDecoder>,
+    w_binauralizer: Option<WBinauralizer>,
 }
 
 impl Engine {
@@ -81,6 +83,17 @@ impl Engine {
             reverb: ReverbCore::new(sample_rate),
             externalizer: Externalizer::new(sample_rate),
             decoder: None,
+            w_binauralizer: None,
+        }
+    }
+
+    /// §13 / §12 step 10: install the W-channel binauralizer
+    /// (decoder_post). `filter_a` and `filter_b` are the raw bundled
+    /// blobs (2865 f32 each, little-endian). Returns `true` on success.
+    pub fn load_w_binauralizer(&mut self, filter_a: &[u8], filter_b: &[u8]) -> bool {
+        match WBinauralizer::from_bytes(filter_a, filter_b) {
+            Some(wb) => { self.w_binauralizer = Some(wb); true }
+            None => false,
         }
     }
 
@@ -183,11 +196,11 @@ impl Engine {
 
     /// §2.4 `positionMode` (0 = world, 1 = relative/head-locked).
     pub fn set_source_position_mode(&mut self, idx: usize, mode: u8) {
-        if let Some(s) = self.sources.get_mut(idx) {
-            if s.position_mode != mode {
-                s.position_mode = mode;
-                s.pos_dirty = true;
-            }
+        if let Some(s) = self.sources.get_mut(idx)
+            && s.position_mode != mode
+        {
+            s.position_mode = mode;
+            s.pos_dirty = true;
         }
     }
 
@@ -319,6 +332,12 @@ impl Engine {
         // internally when disabled and ramped to zero.
         self.externalizer.process(&mut self.stereo_out);
 
+        // §13 / §12 step 10: W-channel binauralizer adds a diffuse
+        // envelopment layer derived from the W (omni) ambisonic channel.
+        if let Some(wb) = self.w_binauralizer.as_mut() {
+            wb.process_add(&self.ambi_bus[0], &mut self.stereo_out);
+        }
+
         // §6.9 stereo-bypass sources: mix straight into stereo_out
         // after externalizer (bypass skips ALL spatial DSP, including
         // the externalizer per spec §6.9).
@@ -327,6 +346,7 @@ impl Engine {
                 continue;
             }
             let slab = &inputs[i];
+            #[allow(clippy::needless_range_loop)]
             for n in 0..BLOCK_SIZE {
                 let g = src.gain.tick();
                 if src.input_channel_count >= 2 {
@@ -781,6 +801,7 @@ mod tests {
         let step = 2.0 * PI * freq / sr;
         for _ in 0..blocks {
             let mut b = [[0.0_f32; BLOCK_SIZE]; 2];
+            #[allow(clippy::needless_range_loop)]
             for i in 0..BLOCK_SIZE {
                 let s = phase.sin();
                 b[0][i] = s;
