@@ -11,6 +11,7 @@
 use core::ffi::c_uchar;
 use core::slice;
 
+use crate::audio_bed::BedFormat;
 use crate::consts::BLOCK_SIZE;
 use crate::engine::Engine;
 use crate::hrtf::Hrtf;
@@ -294,6 +295,49 @@ pub unsafe extern "C" fn engine_set_source_directivity(
     }
 }
 
+/// §2.6 audio bed format. See `audio_bed::BedFormat` for the enum
+/// values (0 = NoInput / removes the bed). Returns `true` on a valid
+/// format, `false` otherwise.
+///
+/// # Safety
+/// `engine` must be valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn engine_set_audio_bed_format(
+    engine: *mut Engine,
+    format: u8,
+) -> bool {
+    let Some(e) = (unsafe { engine.as_mut() }) else { return false; };
+    let Some(f) = BedFormat::from_u8(format) else { return false; };
+    e.set_audio_bed_format(f);
+    true
+}
+
+/// Bed master linear gain.
+///
+/// # Safety
+/// `engine` must be valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn engine_set_audio_bed_gain(engine: *mut Engine, gain: f32) {
+    if let Some(e) = unsafe { engine.as_mut() } {
+        e.set_audio_bed_gain(gain);
+    }
+}
+
+/// `headlocked = true` makes the bed move with the listener;
+/// `false` (default) world-locks it.
+///
+/// # Safety
+/// `engine` must be valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn engine_set_audio_bed_headlocked(
+    engine: *mut Engine,
+    headlocked: bool,
+) {
+    if let Some(e) = unsafe { engine.as_mut() } {
+        e.set_audio_bed_headlocked(headlocked);
+    }
+}
+
 /// §13 / §12 step 10: install the W-channel binauralizer
 /// (decoder_post) from two raw blobs matching
 /// `data/hrtf_post_filter_a.bin` and `_b.bin` (each
@@ -358,11 +402,11 @@ pub extern "C" fn engine_block_size() -> u32 {
 ///
 /// `inputs` is `num_sources × 2 × 128` source-major f32s. Each
 /// source's 256-float slab is `[ch0_0..ch0_127, ch1_0..ch1_127]`.
-/// Mono sources (input_channel_count = 1) only read the first 128
-/// floats; stereo sources read both halves. `out_left` and
-/// `out_right` receive 128 binaural samples each (overwritten, not
-/// accumulated). Inactive sources are ignored regardless of input
-/// contents.
+/// `bed_inputs` is `n_bed_channels × 128` channel-major f32s (one
+/// 128-float buffer per bed channel, in the configured format's
+/// channel order); pass `null` / `0` if no bed.
+/// `out_left` and `out_right` each receive 128 binaural samples
+/// (overwritten, not accumulated).
 ///
 /// # Safety
 /// All pointers must be valid for the indicated lengths.
@@ -371,6 +415,8 @@ pub unsafe extern "C" fn engine_process_block(
     engine: *mut Engine,
     inputs: *const f32,
     num_sources: u32,
+    bed_inputs: *const f32,
+    n_bed_channels: u32,
     out_left: *mut f32,
     out_right: *mut f32,
 ) {
@@ -384,7 +430,14 @@ pub unsafe extern "C" fn engine_process_block(
         // SAFETY: caller guarantees `inputs` is valid for `n*2*128` f32s.
         unsafe { slice::from_raw_parts(inputs as *const [[f32; BLOCK_SIZE]; 2], n) }
     };
-    e.process_block(input_slice);
+    let nb = n_bed_channels as usize;
+    let bed_slice = if bed_inputs.is_null() || nb == 0 {
+        &[][..]
+    } else {
+        // SAFETY: caller guarantees `bed_inputs` is valid for `nb*128` f32s.
+        unsafe { slice::from_raw_parts(bed_inputs as *const [f32; BLOCK_SIZE], nb) }
+    };
+    e.process_block(input_slice, bed_slice);
     if !out_left.is_null() {
         unsafe {
             slice::from_raw_parts_mut(out_left, BLOCK_SIZE)
@@ -414,7 +467,12 @@ mod tests {
             let inputs = vec![1.0_f32; BLOCK_SIZE * 2];
             let mut l = vec![0.0_f32; BLOCK_SIZE];
             let mut r = vec![0.0_f32; BLOCK_SIZE];
-            engine_process_block(e, inputs.as_ptr(), 1, l.as_mut_ptr(), r.as_mut_ptr());
+            engine_process_block(
+                e,
+                inputs.as_ptr(), 1,
+                core::ptr::null(), 0,
+                l.as_mut_ptr(), r.as_mut_ptr(),
+            );
             // Without a loaded HRTF, stereo is zero.
             assert!(l.iter().all(|v| *v == 0.0));
             engine_destroy(e);
@@ -428,10 +486,9 @@ mod tests {
             engine_set_source_gain(core::ptr::null_mut(), 0, 1.0);
             engine_process_block(
                 core::ptr::null_mut(),
-                core::ptr::null(),
-                0,
-                core::ptr::null_mut(),
-                core::ptr::null_mut(),
+                core::ptr::null(), 0,
+                core::ptr::null(), 0,
+                core::ptr::null_mut(), core::ptr::null_mut(),
             );
         }
     }

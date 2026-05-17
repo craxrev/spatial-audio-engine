@@ -11,6 +11,7 @@ use crate::consts::{
     OCCLUSION_FREQ_SCALE, OUTPUT_CHANNELS, REV_DECODE_GAINS, REVERB_OUTPUT_DIRS,
     SH_W_NORM,
 };
+use crate::audio_bed::{AudioBed, BedFormat};
 use crate::decoder::HrtfDecoder;
 use crate::distance::DistanceModel;
 use crate::externalizer::Externalizer;
@@ -53,6 +54,7 @@ pub struct Engine {
     externalizer: Externalizer,
     decoder: Option<HrtfDecoder>,
     w_binauralizer: Option<WBinauralizer>,
+    pub audio_bed: Option<AudioBed>,
 }
 
 impl Engine {
@@ -84,6 +86,34 @@ impl Engine {
             externalizer: Externalizer::new(sample_rate),
             decoder: None,
             w_binauralizer: None,
+            audio_bed: None,
+        }
+    }
+
+    /// §2.6 audio bed. `format = NoInput` removes the bed; any other
+    /// value (re)allocates with the standard speaker layout for that
+    /// format. Bed input is passed alongside object inputs in
+    /// `process_block`.
+    pub fn set_audio_bed_format(&mut self, format: BedFormat) {
+        self.audio_bed = match format {
+            BedFormat::NoInput => None,
+            _ => Some(AudioBed::new(format)),
+        };
+    }
+
+    /// Bed master gain (linear). Applied to every bed channel before
+    /// SH encoding.
+    pub fn set_audio_bed_gain(&mut self, gain: f32) {
+        if let Some(bed) = self.audio_bed.as_mut() {
+            bed.gain = gain.max(0.0);
+        }
+    }
+
+    /// Bed orientation lock. `true` = headlocked (bed rotates with
+    /// the listener); `false` (default) = world-locked.
+    pub fn set_audio_bed_headlocked(&mut self, headlocked: bool) {
+        if let Some(bed) = self.audio_bed.as_mut() {
+            bed.headlocked = headlocked;
         }
     }
 
@@ -277,7 +307,13 @@ impl Engine {
     /// `inputs[i]` is the 2-channel input slab for source `i` for this
     /// block (`[ch0, ch1]`; mono sources only read `ch0`). Inactive
     /// sources and any indices past `inputs.len()` are skipped.
-    pub fn process_block(&mut self, inputs: &[[[f32; BLOCK_SIZE]; 2]]) {
+    /// `bed_inputs` is one mono buffer per audio-bed channel (§12
+    /// step 6). Pass `&[]` for no bed.
+    pub fn process_block(
+        &mut self,
+        inputs: &[[[f32; BLOCK_SIZE]; 2]],
+        bed_inputs: &[[f32; BLOCK_SIZE]],
+    ) {
         for ch in &mut self.ambi_bus {
             ch.fill(0.0);
         }
@@ -300,6 +336,12 @@ impl Engine {
                 &mut self.ambi_bus,
                 &mut self.reverb_in_bus,
             );
+        }
+
+        // §12 step 6: audio bed → ambi_bus. Bed does NOT feed the
+        // reverb input bus (spec note in §12 step 6).
+        if let Some(bed) = self.audio_bed.as_ref() {
+            bed.encode(bed_inputs, self.listener.quat, &mut self.ambi_bus);
         }
 
         if self.reverb_amount > 0.0 {
@@ -562,7 +604,7 @@ mod tests {
     fn settle(e: &mut Engine, inputs: &[[[f32; BLOCK_SIZE]; 2]]) {
         // Two blocks settles the BLOCK_SIZE-length gain ramp.
         for _ in 0..2 {
-            e.process_block(inputs);
+            e.process_block(inputs, &[]);
         }
     }
 
@@ -573,7 +615,7 @@ mod tests {
     fn settle_occlusion(e: &mut Engine, inputs: &[[[f32; BLOCK_SIZE]; 2]]) {
         // 1000-sample ramp / 128-sample block → ~8 blocks to fully settle.
         for _ in 0..16 {
-            e.process_block(inputs);
+            e.process_block(inputs, &[]);
         }
     }
 
@@ -584,7 +626,7 @@ mod tests {
         e.set_source_position(0, 5.0, 0.0, 0.0);
         e.set_source_gain(0, 1.0);
         let inputs: [[[f32; BLOCK_SIZE]; 2]; 0] = [];
-        e.process_block(&inputs);
+        e.process_block(&inputs, &[]);
         for ch in &e.ambi_bus {
             for &v in ch.iter() {
                 assert_eq!(v, 0.0);
@@ -599,7 +641,7 @@ mod tests {
         e.set_source_position(0, 5.0, 0.0, 0.0);
         e.set_source_gain(0, 1.0);
         let input = dc_inputs(1, 1.0);
-        e.process_block(&input);
+        e.process_block(&input, &[]);
         for ch in &e.ambi_bus {
             for &v in ch.iter() {
                 assert_eq!(v, 0.0);
@@ -697,7 +739,7 @@ mod tests {
 
         // Move the source to +Y.
         e.set_source_position(0, 0.0, 5.0, 0.0);
-        e.process_block(&input);
+        e.process_block(&input, &[]);
 
         // During this block Y must ramp up from ~0 toward its target.
         assert!(e.ambi_bus[1][0].abs() < 0.01, "start of crossfade should be ~0");
@@ -820,7 +862,7 @@ mod tests {
         e_open.set_source_gain(0, 1.0);
         e_open.set_source_occlusion(0, 0.0);
         for b in &sine_inputs {
-            e_open.process_block(std::slice::from_ref(b));
+            e_open.process_block(std::slice::from_ref(b), &[]);
         }
         let open_energy: f32 = e_open.ambi_bus[0].iter().map(|v| v * v).sum();
 
@@ -830,7 +872,7 @@ mod tests {
         e_occl.set_source_gain(0, 1.0);
         e_occl.set_source_occlusion(0, 1.0);
         for b in &sine_inputs {
-            e_occl.process_block(std::slice::from_ref(b));
+            e_occl.process_block(std::slice::from_ref(b), &[]);
         }
         let occl_energy: f32 = e_occl.ambi_bus[0].iter().map(|v| v * v).sum();
 
@@ -890,11 +932,11 @@ mod tests {
 
         let mut input = [[[0.0_f32; BLOCK_SIZE]; 2]; 1];
         input[0][0][0] = 1.0;
-        e.process_block(&input);
+        e.process_block(&input, &[]);
 
         input[0][0].fill(0.0); input[0][1].fill(0.0);
         for _ in 0..200 {
-            e.process_block(&input);
+            e.process_block(&input, &[]);
         }
         let bus_energy: f32 = e.reverb_in_bus.iter().map(|v| v * v).sum();
         assert_eq!(bus_energy, 0.0);
@@ -915,12 +957,12 @@ mod tests {
 
         let mut input = [[[0.0_f32; BLOCK_SIZE]; 2]; 1];
         input[0][0][0] = 1.0;
-        e.process_block(&input);
+        e.process_block(&input, &[]);
 
         input[0][0].fill(0.0); input[0][1].fill(0.0);
         // Settle through the FDN.
         for _ in 0..150 {
-            e.process_block(&input);
+            e.process_block(&input, &[]);
         }
 
         // Energy in the directional ambi channels (Y/Z/X = 1/2/3)
@@ -945,14 +987,14 @@ mod tests {
 
         let mut input = [[[0.0_f32; BLOCK_SIZE]; 2]; 1];
         input[0][0][0] = 1.0;
-        e.process_block(&input);
+        e.process_block(&input, &[]);
 
         // No direct positional energy in Y (source is on +X), and with
         // reverb_amount=0 no reverb energy should reach Y either, so Y
         // stays silent after the gain ramp settles.
         input[0][0].fill(0.0); input[0][1].fill(0.0);
         for _ in 0..150 {
-            e.process_block(&input);
+            e.process_block(&input, &[]);
         }
         let y_energy: f32 = e.ambi_bus[1].iter().map(|v| v * v).sum();
         assert!(y_energy < 1e-10, "reverb_amount=0 should not feed ambi: {y_energy}");

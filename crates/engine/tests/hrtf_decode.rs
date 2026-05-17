@@ -15,7 +15,7 @@ fn energy(buf: &[f32]) -> f32 {
 
 fn settle(e: &mut Engine, input: &[[[f32; BLOCK_SIZE]; 2]], n: usize) {
     for _ in 0..n {
-        e.process_block(input);
+        e.process_block(input, &[]);
     }
 }
 
@@ -187,14 +187,14 @@ fn reverb_tail_reaches_stereo_out() {
 
     let mut input = [[[0.0_f32; BLOCK_SIZE]; 2]; 1];
     input[0][0][0] = 1.0;
-    e.process_block(&input);
+    e.process_block(&input, &[]);
 
     // Run 200 silent blocks (~533ms at 48k) so the impulse propagates
     // into and back out of the FDN delays and HRTF convolution.
     input[0][0].fill(0.0); input[0][1].fill(0.0);
     let mut tail_energy = 0.0_f32;
     for _ in 0..200 {
-        e.process_block(&input);
+        e.process_block(&input, &[]);
         tail_energy += energy(&e.stereo_out[0]) + energy(&e.stereo_out[1]);
     }
     assert!(tail_energy > 0.0, "reverb tail never reached stereo_out");
@@ -210,16 +210,16 @@ fn reverb_amount_zero_silences_tail() {
 
     let mut input = [[[0.0_f32; BLOCK_SIZE]; 2]; 1];
     input[0][0][0] = 1.0;
-    e.process_block(&input);
+    e.process_block(&input, &[]);
 
     input[0][0].fill(0.0); input[0][1].fill(0.0);
     let mut tail_energy = 0.0_f32;
     // Skip 50 blocks past the direct-path HRTF settle, then measure.
     for _ in 0..50 {
-        e.process_block(&input);
+        e.process_block(&input, &[]);
     }
     for _ in 0..200 {
-        e.process_block(&input);
+        e.process_block(&input, &[]);
         tail_energy += energy(&e.stereo_out[0]) + energy(&e.stereo_out[1]);
     }
     assert!(tail_energy < 1e-6, "tail should be silent with reverb_amount=0: {tail_energy}");

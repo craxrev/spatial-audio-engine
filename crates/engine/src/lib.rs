@@ -1,6 +1,7 @@
 //! Spatial audio engine — clean-room implementation of the spec in
 //! `design notes`. See `development notes` for the phased build plan.
 
+pub mod audio_bed;
 pub mod biquad;
 pub mod consts;
 pub mod conv;

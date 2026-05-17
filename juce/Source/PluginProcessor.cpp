@@ -371,7 +371,7 @@ void SpatialAudioProcessor::processOneEngineBlock()
     }
 
     float outL[ENGINE_BLOCK], outR[ENGINE_BLOCK];
-    engine_process_block(engine_, slab, 1, outL, outR);
+    engine_process_block(engine_, slab, 1, nullptr, 0, outL, outR);
 
     for (int i = 0; i < ENGINE_BLOCK; ++i)
     {

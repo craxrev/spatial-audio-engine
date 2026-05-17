@@ -106,8 +106,9 @@ bool engine_load_w_binauralizer(
 //
 // `inputs` is `num_sources * 2 * 128` f32s, source-major. Each
 // source's 256-float slab is [ch0_0..ch0_127, ch1_0..ch1_127].
-// Mono sources only read the first 128 floats; stereo sources read
-// both halves.
+// `bed_inputs` is `n_bed_channels * 128` f32s, channel-major (one
+// 128-float buffer per bed channel in the configured §12 step 6
+// format order). Pass NULL/0 if no bed.
 // `out_left` and `out_right` each receive 128 binaural f32s,
 // overwritten (not accumulated).
 //
@@ -117,9 +118,23 @@ void engine_process_block(
     Engine* engine,
     const float* inputs,
     uint32_t num_sources,
+    const float* bed_inputs,
+    uint32_t n_bed_channels,
     float* out_left,
     float* out_right
 );
+
+// §2.6 audio bed format. 0 = NoInput (remove bed), 1 = Mono, 2 = Stereo,
+// 3 = 5.1, 4 = 5.1.2, 5 = 5.1.4, 6 = 7.1, 7 = 7.1.2, 8 = 7.1.4.
+// Returns true on a valid format.
+bool engine_set_audio_bed_format(Engine* engine, uint8_t format);
+
+// Bed master linear gain (no ramp in M12).
+void engine_set_audio_bed_gain(Engine* engine, float gain);
+
+// Bed orientation lock. true = bed follows the listener; false
+// (default) = world-locked.
+void engine_set_audio_bed_headlocked(Engine* engine, bool headlocked);
 
 #ifdef __cplusplus
 }
