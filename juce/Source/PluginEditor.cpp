@@ -7,6 +7,16 @@ namespace
 constexpr float kCompassMaxMeters = 25.0f;
 constexpr float kTwoPi = 6.283185307f;
 
+// Centralised UTF-8 glyph constants. JUCE's String can't be constexpr
+// (heap-backed), so these live as namespace-scope `const` instead.
+const juce::String kGlyphDeg  = juce::String::fromUTF8("\xC2\xB0");     // °
+const juce::String kGlyphMid  = juce::String::fromUTF8("\xC2\xB7");     // ·
+const juce::String kGlyphDash = juce::String::fromUTF8("\xE2\x80\x94"); // —
+// Larger BLACK DOWN/UP-POINTING TRIANGLE (U+25BC / U+25B2) — better
+// JUCE-font coverage than the small variants (U+25BE / U+25B4).
+const juce::String kGlyphDown = juce::String::fromUTF8("\xE2\x96\xBC"); // ▼
+const juce::String kGlyphUp   = juce::String::fromUTF8("\xE2\x96\xB2"); // ▲
+
 // Native azimuth convention: 0 = front, +90 = left, ±180 = back.
 // Screen y-axis points down, so "front" maps to "up" on screen.
 inline juce::Point<float> azimDistToScreen(juce::Point<float> centre, float radius,
@@ -256,21 +266,18 @@ public:
                    juce::Justification::centred);
 
         // Top-left readouts.
-        static const juce::String deg = juce::String::fromUTF8("\xC2\xB0");
-        static const juce::String mid = juce::String::fromUTF8("\xC2\xB7");
-        static const juce::String dash = juce::String::fromUTF8("\xE2\x80\x94");
-        static const juce::String cmd  = juce::String::fromUTF8("\xE2\x8C\x98");
         g.setColour(juce::Colour(0xff9a9a9a));
         g.setFont(juce::Font(juce::FontOptions(11.0f)));
         const auto info = juce::String("pos: ") + juce::String(dist, 2) + " m  "
-                        + juce::String(az, 1) + deg + " (" + azimuthCardinal(az) + ")   yaw: "
-                        + juce::String(yaw, 1) + deg;
+                        + juce::String(az, 1) + kGlyphDeg + " (" + azimuthCardinal(az) + ")   yaw: "
+                        + juce::String(yaw, 1) + kGlyphDeg;
         g.drawText(info, juce::Rectangle<int>(8, 8, getWidth() - 16, 14),
                    juce::Justification::topLeft);
         g.setColour(juce::Colour(0xff666666));
         g.setFont(juce::Font(juce::FontOptions(10.0f)));
-        const auto hint = juce::String("drag dot to move ") + mid + " arrow to aim  "
-                        + dash + "  hold " + cmd + " to snap";
+        // Use ASCII "Cmd" — the U+2318 ⌘ glyph is missing in many fonts.
+        const auto hint = juce::String("drag dot to move ") + kGlyphMid + " arrow to aim  "
+                        + kGlyphDash + "  hold Cmd to snap";
         g.drawText(hint,
                    juce::Rectangle<int>(8, 22, getWidth() - 16, 12),
                    juce::Justification::topLeft);
@@ -302,8 +309,8 @@ public:
         const auto t = hitTest(e.position);
         switch (t)
         {
-            case DragTarget::Heading: setTooltip("Source yaw — drag to aim"); break;
-            case DragTarget::Source:  setTooltip("Source position — drag to move"); break;
+            case DragTarget::Heading: setTooltip("Source yaw - drag to aim"); break;
+            case DragTarget::Source:  setTooltip("Source position - drag to move"); break;
             default:                  setTooltip({}); break;
         }
     }
@@ -553,7 +560,7 @@ class ElevationStrip : public juce::Component,
 public:
     explicit ElevationStrip(juce::AudioProcessorValueTreeState& s) : state_(s)
     {
-        setTooltip(juce::String::fromUTF8("Elevation (position) on the left \xC2\xB7 pitch (orientation) on the right"));
+        setTooltip("Elevation (position) on the left " + kGlyphMid + " pitch (orientation) on the right");
         startTimerHz(30);
     }
 
@@ -624,8 +631,6 @@ private:
 
     void drawPositionColumn(juce::Graphics& g, juce::Rectangle<float> col)
     {
-        static const juce::String deg = juce::String::fromUTF8("\xC2\xB0");
-
         const float cx = col.getCentreX();
         float topY, botY;
         columnTopBot(col, topY, botY);
@@ -658,15 +663,13 @@ private:
 
         g.setColour(juce::Colour(0xff9a9a9a));
         g.setFont(juce::Font(juce::FontOptions(10.0f)));
-        g.drawText(juce::String((int) std::round(el)) + deg,
+        g.drawText(juce::String((int) std::round(el)) + kGlyphDeg,
                    juce::Rectangle<float>(col.getX(), botY + 16.0f, col.getWidth(), 12.0f),
                    juce::Justification::centred);
     }
 
     void drawPitchColumn(juce::Graphics& g, juce::Rectangle<float> col)
     {
-        static const juce::String deg = juce::String::fromUTF8("\xC2\xB0");
-
         const float cx = col.getCentreX();
         float topY, botY;
         columnTopBot(col, topY, botY);
@@ -720,7 +723,7 @@ private:
 
         g.setColour(juce::Colour(0xff9a9a9a));
         g.setFont(juce::Font(juce::FontOptions(10.0f)));
-        g.drawText(juce::String((int) std::round(pitch)) + deg,
+        g.drawText(juce::String((int) std::round(pitch)) + kGlyphDeg,
                    juce::Rectangle<float>(col.getX(), botY + 16.0f, col.getWidth(), 12.0f),
                    juce::Justification::centred);
     }
@@ -749,97 +752,337 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// DistanceCurveEditor — interactive 4-knot piecewise gain graph.
+// Replaces the 7 distance-curve sliders with a draggable visualisation.
+// ---------------------------------------------------------------------------
+
+class DistanceCurveEditor : public juce::Component,
+                            public juce::SettableTooltipClient,
+                            private juce::Timer
+{
+public:
+    explicit DistanceCurveEditor(juce::AudioProcessorValueTreeState& s)
+        : state_(s)
+    {
+        setTooltip("Distance vs gain curve. Drag A/B/C/D nodes to edit. A is the near-field anchor; D is the silence anchor (distance only).");
+        startTimerHz(30);
+    }
+
+    ~DistanceCurveEditor() override { stopTimer(); }
+
+    void paint(juce::Graphics& g) override
+    {
+        g.fillAll(juce::Colour(0xff141414));
+        const auto plot = plotArea();
+
+        // Grid lines.
+        g.setColour(juce::Colour(0xff232323));
+        for (int d = 0; d <= (int) DIST_MAX; d += 10)
+        {
+            const float x = graphX((float) d);
+            g.drawLine(x, plot.getY(), x, plot.getBottom(), 1.0f);
+        }
+        for (int db = (int) DB_MIN; db <= (int) DB_MAX; db += 20)
+        {
+            const float y = graphY((float) db);
+            g.drawLine(plot.getX(), y, plot.getRight(), y, 1.0f);
+        }
+        // 0-dB reference line emphasised.
+        g.setColour(juce::Colour(0xff353535));
+        const float y0 = graphY(0.0f);
+        g.drawLine(plot.getX(), y0, plot.getRight(), y0, 1.0f);
+
+        // Axis labels.
+        g.setColour(juce::Colour(0xff7a7a7a));
+        g.setFont(juce::Font(juce::FontOptions(9.0f)));
+        for (int d : {1, 10, 50, 100, 150})
+        {
+            if ((float) d > DIST_MAX) continue;
+            g.drawText(juce::String(d) + " m",
+                       juce::Rectangle<float>(graphX((float) d) - 18.0f,
+                                              plot.getBottom() + 1.0f, 36.0f, 10.0f),
+                       juce::Justification::centred);
+        }
+        for (int db : {0, -20, -40, -60})
+        {
+            g.drawText(juce::String(db) + " dB",
+                       juce::Rectangle<float>(0.0f, graphY((float) db) - 5.0f,
+                                              plot.getX() - 2.0f, 10.0f),
+                       juce::Justification::centredRight);
+        }
+
+        // The curve path.
+        const auto a = nodePos(Node::A);
+        const auto b = nodePos(Node::B);
+        const auto c = nodePos(Node::C);
+        const auto d = nodePos(Node::D); // D's "gain" is silence (DB_MIN)
+
+        // Fill the area under the curve up to 0 dB.
+        juce::Path fill;
+        fill.startNewSubPath(graphX(0.0f), y0);
+        fill.lineTo(graphX(0.0f), a.y);
+        fill.lineTo(a.x, a.y);
+        fill.lineTo(b.x, b.y);
+        fill.lineTo(c.x, c.y);
+        fill.lineTo(d.x, d.y);
+        fill.lineTo(d.x, y0);
+        fill.closeSubPath();
+        g.setColour(juce::Colour(0x33ff8c42));
+        g.fillPath(fill);
+
+        // The curve itself.
+        juce::Path line;
+        line.startNewSubPath(graphX(0.0f), a.y); // flat below a_dist
+        line.lineTo(a.x, a.y);
+        line.lineTo(b.x, b.y);
+        line.lineTo(c.x, c.y);
+        line.lineTo(d.x, d.y);
+        g.setColour(juce::Colour(0xffff8c42));
+        g.strokePath(line, juce::PathStrokeType(1.5f));
+
+        // Draggable nodes.
+        drawNode(g, a, "A", Node::A);
+        drawNode(g, b, "B", Node::B);
+        drawNode(g, c, "C", Node::C);
+        drawNode(g, d, "D", Node::D);
+    }
+
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        activeNode_ = hitTestNode(e.position);
+        beginGesture(activeNode_);
+        applyDrag(e.position);
+    }
+
+    void mouseDrag(const juce::MouseEvent& e) override { applyDrag(e.position); }
+
+    void mouseUp(const juce::MouseEvent&) override
+    {
+        endGesture(activeNode_);
+        activeNode_ = Node::None;
+    }
+
+private:
+    enum class Node { None, A, B, C, D };
+    static constexpr float DIST_MAX = 150.0f;
+    static constexpr float DB_MIN   = -80.0f;
+    static constexpr float DB_MAX   = 6.0f;
+
+    void timerCallback() override { repaint(); }
+
+    juce::Rectangle<float> plotArea() const
+    {
+        // Reserve left edge for dB labels, bottom for distance labels.
+        const auto b = getLocalBounds().toFloat();
+        return b.withTrimmedLeft(34.0f).withTrimmedBottom(12.0f).withTrimmedTop(4.0f).withTrimmedRight(6.0f);
+    }
+
+    float graphX(float dist) const
+    {
+        const auto p = plotArea();
+        const float t = juce::jlimit(0.0f, 1.0f, dist / DIST_MAX);
+        return p.getX() + t * p.getWidth();
+    }
+    float graphY(float db) const
+    {
+        const auto p = plotArea();
+        const float t = juce::jlimit(0.0f, 1.0f, (DB_MAX - db) / (DB_MAX - DB_MIN));
+        return p.getY() + t * p.getHeight();
+    }
+
+    float pxToDist(float x) const
+    {
+        const auto p = plotArea();
+        const float t = juce::jlimit(0.0f, 1.0f, (x - p.getX()) / p.getWidth());
+        return t * DIST_MAX;
+    }
+    float pxToDb(float y) const
+    {
+        const auto p = plotArea();
+        const float t = juce::jlimit(0.0f, 1.0f, (y - p.getY()) / p.getHeight());
+        return DB_MAX - t * (DB_MAX - DB_MIN);
+    }
+
+    juce::Point<float> nodePos(Node n) const
+    {
+        const auto v = [&](const char* id) { return state_.getRawParameterValue(id)->load(); };
+        switch (n)
+        {
+            case Node::A: return { graphX(v("dist_a")), graphY(v("dist_a_db")) };
+            case Node::B: return { graphX(v("dist_b")), graphY(v("dist_b_db")) };
+            case Node::C: return { graphX(v("dist_c")), graphY(v("dist_c_db")) };
+            case Node::D: return { graphX(v("dist_d")), graphY(DB_MIN) };
+            default: return {};
+        }
+    }
+
+    void drawNode(juce::Graphics& g, juce::Point<float> p, const char* label, Node n)
+    {
+        const bool active = activeNode_ == n;
+        const float r = active ? 7.0f : 5.0f;
+        g.setColour(juce::Colour(0xffff8c42));
+        g.fillEllipse(p.x - r, p.y - r, 2 * r, 2 * r);
+        g.setColour(juce::Colour(0xff5a2410));
+        g.drawEllipse(p.x - r, p.y - r, 2 * r, 2 * r, 1.5f);
+        g.setColour(juce::Colour(0xffe8c5a8));
+        g.setFont(juce::Font(juce::FontOptions(10.0f)));
+        g.drawText(label,
+                   juce::Rectangle<float>(p.x + r + 1, p.y - 6, 14, 12),
+                   juce::Justification::centredLeft);
+    }
+
+    Node hitTestNode(juce::Point<float> p) const
+    {
+        for (auto n : { Node::A, Node::B, Node::C, Node::D })
+        {
+            if (p.getDistanceFrom(nodePos(n)) <= 12.0f)
+                return n;
+        }
+        return Node::None;
+    }
+
+    void applyDrag(juce::Point<float> p)
+    {
+        if (activeNode_ == Node::None) return;
+        const float dist = pxToDist(p.x);
+        const float db   = pxToDb(p.y);
+        // Enforce ordering a < b < c < d (small epsilon to avoid identical values).
+        const auto v = [&](const char* id) { return state_.getRawParameterValue(id)->load(); };
+        const float a_d = v("dist_a"), b_d = v("dist_b"), c_d = v("dist_c"), d_d = v("dist_d");
+        switch (activeNode_)
+        {
+            case Node::A:
+                set("dist_a",    juce::jlimit(0.0f, b_d - 0.01f, dist));
+                set("dist_a_db", juce::jlimit(-80.0f, 12.0f, db));
+                break;
+            case Node::B:
+                set("dist_b",    juce::jlimit(a_d + 0.01f, c_d - 0.01f, dist));
+                set("dist_b_db", juce::jlimit(-80.0f, 12.0f, db));
+                break;
+            case Node::C:
+                set("dist_c",    juce::jlimit(b_d + 0.01f, d_d - 0.01f, dist));
+                set("dist_c_db", juce::jlimit(-80.0f, 12.0f, db));
+                break;
+            case Node::D:
+                set("dist_d", juce::jlimit(c_d + 0.01f, 300.0f, dist));
+                break;
+            default: break;
+        }
+    }
+
+    void set(const char* id, float v)
+    {
+        if (auto* p = state_.getParameter(id))
+            p->setValueNotifyingHost(p->convertTo0to1(v));
+    }
+    void beginGesture(Node n) { forEachId(n, [](auto* p) { p->beginChangeGesture(); }); }
+    void endGesture(Node n)   { forEachId(n, [](auto* p) { p->endChangeGesture();   }); }
+    template <class F> void forEachId(Node n, F f)
+    {
+        auto ids = idsFor(n);
+        for (auto* id : ids)
+            if (auto* p = state_.getParameter(id))
+                f(p);
+    }
+    static std::vector<const char*> idsFor(Node n)
+    {
+        switch (n)
+        {
+            case Node::A: return { "dist_a", "dist_a_db" };
+            case Node::B: return { "dist_b", "dist_b_db" };
+            case Node::C: return { "dist_c", "dist_c_db" };
+            case Node::D: return { "dist_d" };
+            default:      return {};
+        }
+    }
+
+    juce::AudioProcessorValueTreeState& state_;
+    Node activeNode_ = Node::None;
+};
+
+// ---------------------------------------------------------------------------
 // SpatialAudioEditor.
 // ---------------------------------------------------------------------------
+
+namespace {
+
+void styleHeaderLabel(juce::Label& l)
+{
+    l.setColour(juce::Label::textColourId, juce::Colour(0xff8a8a8a));
+    l.setFont(juce::Font(juce::FontOptions(10.0f)).withExtraKerningFactor(0.18f));
+    l.setJustificationType(juce::Justification::centredLeft);
+}
+
+} // namespace
 
 SpatialAudioEditor::SpatialAudioEditor(SpatialAudioProcessor& p)
     : AudioProcessorEditor(p), proc_(p)
 {
-    compass_   = std::make_unique<SpatialCompass>(p.apvts);
-    elevation_ = std::make_unique<ElevationStrip>(p.apvts);
+    compass_     = std::make_unique<SpatialCompass>(p.apvts);
+    elevation_   = std::make_unique<ElevationStrip>(p.apvts);
+    curveEditor_ = std::make_unique<DistanceCurveEditor>(p.apvts);
     addAndMakeVisible(*compass_);
     addAndMakeVisible(*elevation_);
+    addAndMakeVisible(*curveEditor_);
 
-    auto initLinearSlider = [this](juce::Slider& s)
+    styleHeaderLabel(shapeHeader_);
+    styleHeaderLabel(environmentHeader_);
+    styleHeaderLabel(outputHeader_);
+    styleHeaderLabel(advancedHeader_);
+    addAndMakeVisible(shapeHeader_);
+    addAndMakeVisible(environmentHeader_);
+    addAndMakeVisible(outputHeader_);
+    addAndMakeVisible(advancedHeader_);
+
+    auto initSlider = [this](juce::Slider& s)
     {
         s.setSliderStyle(juce::Slider::LinearHorizontal);
-        s.setTextBoxStyle(juce::Slider::TextBoxRight, false, 64, 18);
+        s.setTextBoxStyle(juce::Slider::TextBoxRight, false, 60, 18);
         addAndMakeVisible(s);
     };
-    auto initLeftLabel = [this](juce::Label& l, const char* text)
+    auto initLabel = [this](juce::Label& l, const char* text)
     {
         l.setText(text, juce::dontSendNotification);
         l.setColour(juce::Label::textColourId, juce::Colour(0xffbbbbbb));
         l.setJustificationType(juce::Justification::centredRight);
+        l.setFont(juce::Font(juce::FontOptions(11.0f)));
         addAndMakeVisible(l);
     };
 
-    initLeftLabel(gainLabel_, "Gain");
-    initLinearSlider(gainSlider_);
+    // Top row (gain + aim).
+    initLabel(gainLabel_, "Gain");
+    initSlider(gainSlider_);
     gainSlider_.setTooltip("Source gain (dB).");
     gainAttachment_ = std::make_unique<SliderAttachment>(p.apvts, "gain_db", gainSlider_);
 
-    initLeftLabel(occlusionLabel_, "Occlusion");
-    initLinearSlider(occlusionSlider_);
-    occlusionSlider_.setTooltip("Occlusion (0..1): wall thickness between source and listener. Smoothed; drives a per-source low-pass.");
-    occlusionAttachment_ =
-        std::make_unique<SliderAttachment>(p.apvts, "occlusion", occlusionSlider_);
+    aimAtListenerButton_.setTooltip("Lock source orientation to face the listener.");
+    aimAtListenerButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(0xffbbbbbb));
+    addAndMakeVisible(aimAtListenerButton_);
+    aimAttachment_ = std::make_unique<ButtonAttachment>(
+        p.apvts, "aim_at_listener", aimAtListenerButton_);
 
-    initLeftLabel(spreadLabel_, "Spread");
-    initLinearSlider(spreadSlider_);
+    // SHAPE section.
+    initLabel(spreadLabel_, "Spread");
+    initSlider(spreadSlider_);
     spreadSlider_.setTooltip(juce::String::fromUTF8("Cone outer angle: angle from forward at which the source becomes fully off-axis. 0\xC2\xB0 = pencil beam; 180\xC2\xB0 = omnidirectional."));
-    spreadAttachment_ =
-        std::make_unique<SliderAttachment>(p.apvts, "dir_outer_deg", spreadSlider_);
+    spreadAttachment_ = std::make_unique<SliderAttachment>(p.apvts, "dir_outer_deg", spreadSlider_);
 
-    initLeftLabel(focusLabel_, "Focus");
-    initLinearSlider(focusSlider_);
-    focusSlider_.setTooltip(juce::String::fromUTF8("Cone inner angle: width of the full-volume zone in front of the source. 0\xC2\xB0 = no sweet spot; matches Spread = hard edge."));
-    focusAttachment_ =
-        std::make_unique<SliderAttachment>(p.apvts, "dir_inner_deg", focusSlider_);
+    initLabel(focusLabel_, "Focus");
+    initSlider(focusSlider_);
+    focusSlider_.setTooltip(juce::String::fromUTF8("Cone inner angle: width of the full-volume zone in front of the source."));
+    focusAttachment_ = std::make_unique<SliderAttachment>(p.apvts, "dir_inner_deg", focusSlider_);
 
-    initLeftLabel(offGainLabel_, "Off-Gain");
-    initLinearSlider(offGainSlider_);
-    offGainSlider_.setTooltip("Off-axis gain: how loud the source is at the cone edge (1 = no attenuation, 0 = silent).");
-    offGainAttachment_ =
-        std::make_unique<SliderAttachment>(p.apvts, "dir_outer_gain", offGainSlider_);
+    initLabel(offGainLabel_, "Off-Gain");
+    initSlider(offGainSlider_);
+    offGainSlider_.setTooltip("Off-axis gain at the cone edge (1 = no attenuation, 0 = silent).");
+    offGainAttachment_ = std::make_unique<SliderAttachment>(p.apvts, "dir_outer_gain", offGainSlider_);
 
-    initLeftLabel(offLpLabel_, "Off-LP");
-    initLinearSlider(offLpSlider_);
-    offLpSlider_.setTooltip("Off-axis low-pass: how muffled the source is at the cone edge (0 = bright, 1 = dark).");
-    offLpAttachment_ =
-        std::make_unique<SliderAttachment>(p.apvts, "dir_outer_lp", offLpSlider_);
+    initLabel(offLpLabel_, "Off-LP");
+    initSlider(offLpSlider_);
+    offLpSlider_.setTooltip("Off-axis low-pass at the cone edge (0 = bright, 1 = dark).");
+    offLpAttachment_ = std::make_unique<SliderAttachment>(p.apvts, "dir_outer_lp", offLpSlider_);
 
-    initLeftLabel(directPathLabel_, "Direct");
-    initLinearSlider(directPathSlider_);
-    directPathSlider_.setTooltip("Direct path gain — multiplies the direct (non-reverb) signal only.");
-    directPathAttachment_ =
-        std::make_unique<SliderAttachment>(p.apvts, "direct_path_gain", directPathSlider_);
-
-    initLeftLabel(reverbSendLabel_, "Reverb Send");
-    initLinearSlider(reverbSendSlider_);
-    reverbSendSlider_.setTooltip("Per-source send into the reverb bus. 0 = dry source.");
-    reverbSendAttachment_ =
-        std::make_unique<SliderAttachment>(p.apvts, "reverb_send", reverbSendSlider_);
-
-    initLeftLabel(reverbAmountLabel_, "Reverb Amount");
-    initLinearSlider(reverbAmountSlider_);
-    reverbAmountSlider_.setTooltip("Master reverb mix multiplier. 0 = no reverb, 1 = unity.");
-    reverbAmountAttachment_ =
-        std::make_unique<SliderAttachment>(p.apvts, "reverb_amount", reverbAmountSlider_);
-
-    initLeftLabel(extAmountLabel_, "Ext. Amount");
-    initLinearSlider(extAmountSlider_);
-    extAmountSlider_.setTooltip("Externalizer amount (0..100). 0 = off; higher = stronger out-of-head effect (and more signal attenuation).");
-    extAmountAttachment_ =
-        std::make_unique<SliderAttachment>(p.apvts, "externalizer_amount", extAmountSlider_);
-
-    initLeftLabel(extCharLabel_, "Ext. Character");
-    initLinearSlider(extCharSlider_);
-    extCharSlider_.setTooltip("Externalizer tilt EQ (0..100, 50 = neutral). Below 50 = brighter; above 50 = darker.");
-    extCharAttachment_ =
-        std::make_unique<SliderAttachment>(p.apvts, "externalizer_character", extCharSlider_);
-
-    // §3 distance curve: 7 knot params + preset selector.
+    // Distance-curve preset combobox (sits above the curve editor).
     struct Preset { const char* name;
                     float aD, aDb, bD, bDb, cD, cDb, dD; };
     static const Preset kPresets[] = {
@@ -854,10 +1097,7 @@ SpatialAudioEditor::SpatialAudioEditor(SpatialAudioProcessor& p)
         {"Main (Exp.)",      1.34f,  0.00f, 30.00f,-40.00f, 60.00f,-57.00f,150.00f},
         {"Secondary (Exp.)", 1.34f,  0.00f, 10.00f,-12.00f, 55.00f,-50.00f,150.00f},
     };
-    distPresetLabel_.setText("Curve preset", juce::dontSendNotification);
-    distPresetLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffbbbbbb));
-    distPresetLabel_.setJustificationType(juce::Justification::centredRight);
-    addAndMakeVisible(distPresetLabel_);
+    initLabel(distPresetLabel_, "Preset");
     int presetId = 1;
     for (const auto& pr : kPresets)
         distPresetBox_.addItem(pr.name, presetId++);
@@ -879,55 +1119,76 @@ SpatialAudioEditor::SpatialAudioEditor(SpatialAudioProcessor& p)
         setp("dist_d", pr.dD);
     };
 
-    auto attachKnot = [&](juce::Slider& s, juce::Label& l, const char* label,
-                          const char* id, const char* tip,
-                          std::unique_ptr<SliderAttachment>& att) {
-        initLeftLabel(l, label);
-        initLinearSlider(s);
-        s.setTooltip(tip);
-        att = std::make_unique<SliderAttachment>(p.apvts, id, s);
-    };
-    attachKnot(distASlider_,   distALabel_,   "A dist", "dist_a",
-               "First knot distance. Below this, source plays at A dB.", distAAttachment_);
-    attachKnot(distAdBSlider_, distAdBLabel_, "A dB",   "dist_a_db",
-               "Gain at the first knot (typically 0 dB).", distAdBAttachment_);
-    attachKnot(distBSlider_,   distBLabel_,   "B dist", "dist_b",
-               "Second knot distance.", distBAttachment_);
-    attachKnot(distBdBSlider_, distBdBLabel_, "B dB",   "dist_b_db",
-               "Gain at the second knot.", distBdBAttachment_);
-    attachKnot(distCSlider_,   distCLabel_,   "C dist", "dist_c",
-               "Third knot distance.", distCAttachment_);
-    attachKnot(distCdBSlider_, distCdBLabel_, "C dB",   "dist_c_db",
-               "Gain at the third knot.", distCdBAttachment_);
-    attachKnot(distDSlider_,   distDLabel_,   "D dist", "dist_d",
-               "Silence anchor: source is fully silent beyond this distance.",
-               distDAttachment_);
+    // ENVIRONMENT section.
+    initLabel(occlusionLabel_, "Occlusion");
+    initSlider(occlusionSlider_);
+    occlusionSlider_.setTooltip("Wall thickness between source and listener. Drives a per-source low-pass.");
+    occlusionAttachment_ = std::make_unique<SliderAttachment>(p.apvts, "occlusion", occlusionSlider_);
 
-    // §2.5 rendering_mode as a checkbox: off = Spatial (full pipeline),
-    // on = Stereo bypass (host stereo → output, skip all spatial DSP).
+    initLabel(reverbSendLabel_, "Rev. Send");
+    initSlider(reverbSendSlider_);
+    reverbSendSlider_.setTooltip("Per-source send into the reverb bus. 0 = dry source.");
+    reverbSendAttachment_ = std::make_unique<SliderAttachment>(p.apvts, "reverb_send", reverbSendSlider_);
+
+    initLabel(reverbAmountLabel_, "Rev. Amount");
+    initSlider(reverbAmountSlider_);
+    reverbAmountSlider_.setTooltip("Master reverb mix multiplier. 0 = no reverb.");
+    reverbAmountAttachment_ = std::make_unique<SliderAttachment>(p.apvts, "reverb_amount", reverbAmountSlider_);
+
+    // OUTPUT section.
+    initLabel(extAmountLabel_, "Ext. Amount");
+    initSlider(extAmountSlider_);
+    extAmountSlider_.setTooltip("Externalizer amount (0..100). 0 = off; higher = stronger out-of-head effect.");
+    extAmountAttachment_ = std::make_unique<SliderAttachment>(p.apvts, "externalizer_amount", extAmountSlider_);
+
     stereoBypassButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(0xffbbbbbb));
-    stereoBypassButton_.setTooltip("Skip all spatial DSP — pass host stereo straight to output. HRTF, cone, occlusion, distance curve, reverb send are all bypassed; only Gain still applies.");
+    stereoBypassButton_.setTooltip("Skip all spatial DSP - pass host stereo straight to output. Only Gain still applies.");
     addAndMakeVisible(stereoBypassButton_);
     stereoBypassAttachment_ =
         std::make_unique<ButtonAttachment>(p.apvts, "rendering_mode", stereoBypassButton_);
 
+    // ADVANCED section (hidden by default).
+    initLabel(directPathLabel_, "Direct");
+    initSlider(directPathSlider_);
+    directPathSlider_.setTooltip("Direct-path gain - multiplies the non-reverb signal only.");
+    directPathAttachment_ = std::make_unique<SliderAttachment>(p.apvts, "direct_path_gain", directPathSlider_);
+
+    initLabel(extCharLabel_, "Ext. Char.");
+    initSlider(extCharSlider_);
+    extCharSlider_.setTooltip("Externalizer tilt EQ (0..100, 50 = neutral). Below 50 = brighter; above 50 = darker.");
+    extCharAttachment_ = std::make_unique<SliderAttachment>(p.apvts, "externalizer_character", extCharSlider_);
+
     legacyPostButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(0xffbbbbbb));
-    legacyPostButton_.setTooltip("Use the v0.4 cross-channel coloration filter instead of the v0.5 W-binauralizer. The v0.4 post-decoder REPLACES the stereo intermediate with a 2×2 cross-feed; v0.5 ADDS a diffuse envelopment layer. Different audible character; pick by taste or to match a legacy reference.");
+    legacyPostButton_.setTooltip("Use the v0.4 cross-channel coloration filter instead of the v0.5 W-binauralizer.");
     addAndMakeVisible(legacyPostButton_);
-    legacyPostAttachment_ =
-        std::make_unique<ButtonAttachment>(p.apvts, "legacy_post", legacyPostButton_);
+    legacyPostAttachment_ = std::make_unique<ButtonAttachment>(p.apvts, "legacy_post", legacyPostButton_);
+
+    // Advanced disclosure starts collapsed.
+    auto setAdvVisible = [this](bool v) {
+        directPathLabel_.setVisible(v);
+        directPathSlider_.setVisible(v);
+        extCharLabel_.setVisible(v);
+        extCharSlider_.setVisible(v);
+        legacyPostButton_.setVisible(v);
+        advancedHeader_.setVisible(v);
+    };
+    setAdvVisible(false);
+
+    advancedButton_.setTooltip("Show / hide additional source parameters (Direct, Ext. Character, Legacy post-decoder).");
+    advancedButton_.setButtonText("Advanced " + kGlyphDown);
+    advancedButton_.onClick = [this, setAdvVisible] {
+        advancedOpen_ = !advancedOpen_;
+        advancedButton_.setButtonText("Advanced " + (advancedOpen_ ? kGlyphUp : kGlyphDown));
+        setAdvVisible(advancedOpen_);
+        setSize(580, advancedOpen_ ? 808 : 760);
+    };
+    addAndMakeVisible(advancedButton_);
 
     resetButton_.setTooltip("Reset all parameters to defaults.");
     resetButton_.onClick = [this] { resetAllParams(); };
     addAndMakeVisible(resetButton_);
 
-    aimAtListenerButton_.setTooltip("Lock source orientation to face the listener.");
-    aimAtListenerButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(0xffbbbbbb));
-    addAndMakeVisible(aimAtListenerButton_);
-    aimAttachment_ = std::make_unique<ButtonAttachment>(
-        p.apvts, "aim_at_listener", aimAtListenerButton_);
-
-    setSize(560, 1054);
+    setSize(580, 760);
 }
 
 SpatialAudioEditor::~SpatialAudioEditor() = default;
@@ -967,53 +1228,100 @@ void SpatialAudioEditor::paint(juce::Graphics& g)
     g.fillAll(juce::Colour(0xff0c0c0c));
 }
 
+void SpatialAudioEditor::layoutSliderRow(juce::Rectangle<int>& area, int rowH,
+                                          juce::Label& label, juce::Slider& slider)
+{
+    auto r = area.removeFromTop(rowH);
+    area.removeFromTop(2);
+    label.setBounds(r.removeFromLeft(80));
+    slider.setBounds(r);
+}
+
+void SpatialAudioEditor::layoutPairedRow(juce::Rectangle<int>& area, int rowH,
+                                          juce::Label& l1, juce::Slider& s1,
+                                          juce::Label& l2, juce::Slider& s2)
+{
+    auto r = area.removeFromTop(rowH);
+    area.removeFromTop(2);
+    const int halfW = r.getWidth() / 2;
+    auto left  = r.removeFromLeft(halfW - 4);
+    r.removeFromLeft(8);
+    auto right = r;
+    l1.setBounds(left.removeFromLeft(60));
+    s1.setBounds(left);
+    l2.setBounds(right.removeFromLeft(60));
+    s2.setBounds(right);
+}
+
 void SpatialAudioEditor::resized()
 {
-    auto area = getLocalBounds().reduced(10);
+    auto area = getLocalBounds().reduced(8);
+    auto headerRect = [&area]() { area.removeFromTop(4); return area.removeFromTop(14); };
 
-    auto row = [&area](int h) { auto r = area.removeFromBottom(h); area.removeFromBottom(4); return r; };
-    auto layoutSlider = [](juce::Rectangle<int> r, juce::Label& l, juce::Slider& s)
-    {
-        l.setBounds(r.removeFromLeft(80));
-        s.setBounds(r);
-    };
-
-    auto bottom = row(28);
-    gainLabel_.setBounds(bottom.removeFromLeft(80));
+    // Reserve bottom row up-front so it can never be clipped by the
+    // ADVANCED section overflowing downward.
+    auto bottom = area.removeFromBottom(26);
+    area.removeFromBottom(6);
     resetButton_.setBounds(bottom.removeFromRight(72));
     bottom.removeFromRight(6);
-    aimAtListenerButton_.setBounds(bottom.removeFromRight(124));
-    bottom.removeFromRight(6);
-    gainSlider_.setBounds(bottom);
+    advancedButton_.setBounds(bottom.removeFromRight(110));
 
-    layoutSlider(row(24), distDLabel_,        distDSlider_);
-    layoutSlider(row(24), distCdBLabel_,      distCdBSlider_);
-    layoutSlider(row(24), distCLabel_,        distCSlider_);
-    layoutSlider(row(24), distBdBLabel_,      distBdBSlider_);
-    layoutSlider(row(24), distBLabel_,        distBSlider_);
-    layoutSlider(row(24), distAdBLabel_,      distAdBSlider_);
-    layoutSlider(row(24), distALabel_,        distASlider_);
-    stereoBypassButton_.setBounds(row(24));
-    legacyPostButton_.setBounds(row(24));
-    {
-        auto r = row(24);
-        distPresetLabel_.setBounds(r.removeFromLeft(80));
-        distPresetBox_.setBounds(r);
-    }
-    layoutSlider(row(24), extCharLabel_,      extCharSlider_);
-    layoutSlider(row(24), extAmountLabel_,    extAmountSlider_);
-    layoutSlider(row(24), reverbAmountLabel_, reverbAmountSlider_);
-    layoutSlider(row(24), reverbSendLabel_,   reverbSendSlider_);
-    layoutSlider(row(24), directPathLabel_,   directPathSlider_);
-    layoutSlider(row(24), offLpLabel_,        offLpSlider_);
-    layoutSlider(row(24), offGainLabel_,      offGainSlider_);
-    layoutSlider(row(24), focusLabel_,        focusSlider_);
-    layoutSlider(row(24), spreadLabel_,       spreadSlider_);
-    layoutSlider(row(24), occlusionLabel_,    occlusionSlider_);
-
-    area.removeFromBottom(6);
-
-    auto strip = area.removeFromRight(100);
-    compass_->setBounds(area);
+    // ---- Top: compass + elev strip (square-ish canvas) ----
+    auto canvas = area.removeFromTop(340);
+    auto strip  = canvas.removeFromRight(90);
+    compass_->setBounds(canvas);
     elevation_->setBounds(strip);
+    area.removeFromTop(6);
+
+    // ---- Gain + Aim toggle ----
+    {
+        auto r = area.removeFromTop(24);
+        area.removeFromTop(2);
+        gainLabel_.setBounds(r.removeFromLeft(60));
+        aimAtListenerButton_.setBounds(r.removeFromRight(124));
+        r.removeFromRight(4);
+        gainSlider_.setBounds(r);
+    }
+
+    // ---- SHAPE ----
+    shapeHeader_.setBounds(headerRect());
+    {
+        auto graph = area.removeFromTop(140);
+        area.removeFromTop(2);
+        auto presetRow = graph.removeFromBottom(22);
+        graph.removeFromBottom(2);
+        distPresetLabel_.setBounds(presetRow.removeFromLeft(60));
+        distPresetBox_.setBounds(presetRow);
+        curveEditor_->setBounds(graph);
+    }
+    layoutPairedRow(area, 22, spreadLabel_, spreadSlider_, focusLabel_, focusSlider_);
+    layoutPairedRow(area, 22, offGainLabel_, offGainSlider_, offLpLabel_, offLpSlider_);
+
+    // ---- ENVIRONMENT ----
+    environmentHeader_.setBounds(headerRect());
+    layoutSliderRow(area, 22, occlusionLabel_, occlusionSlider_);
+    layoutPairedRow(area, 22, reverbSendLabel_, reverbSendSlider_,
+                              reverbAmountLabel_, reverbAmountSlider_);
+
+    // ---- OUTPUT ----
+    outputHeader_.setBounds(headerRect());
+    {
+        auto r = area.removeFromTop(22);
+        area.removeFromTop(2);
+        extAmountLabel_.setBounds(r.removeFromLeft(60));
+        stereoBypassButton_.setBounds(r.removeFromRight(124));
+        r.removeFromRight(4);
+        extAmountSlider_.setBounds(r);
+    }
+
+    // ---- ADVANCED (when open) ----
+    if (advancedOpen_)
+    {
+        advancedHeader_.setBounds(headerRect());
+        layoutPairedRow(area, 22, directPathLabel_, directPathSlider_,
+                                  extCharLabel_, extCharSlider_);
+        legacyPostButton_.setBounds(area.removeFromTop(22));
+        area.removeFromTop(2);
+    }
+
 }

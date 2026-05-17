@@ -6,6 +6,7 @@
 
 class SpatialCompass;
 class ElevationStrip;
+class DistanceCurveEditor;
 
 class SpatialAudioEditor : public juce::AudioProcessorEditor
 {
@@ -18,13 +19,26 @@ public:
 
 private:
     void resetAllParams();
+    void toggleAdvanced();
+    void layoutSliderRow(juce::Rectangle<int>& area, int rowH,
+                         juce::Label& label, juce::Slider& slider);
+    void layoutPairedRow(juce::Rectangle<int>& area, int rowH,
+                         juce::Label& l1, juce::Slider& s1,
+                         juce::Label& l2, juce::Slider& s2);
 
     SpatialAudioProcessor& proc_;
 
     juce::TooltipWindow tooltipWindow_ { this, 600 };
 
-    std::unique_ptr<SpatialCompass> compass_;
-    std::unique_ptr<ElevationStrip> elevation_;
+    std::unique_ptr<SpatialCompass>      compass_;
+    std::unique_ptr<ElevationStrip>      elevation_;
+    std::unique_ptr<DistanceCurveEditor> curveEditor_;
+
+    // Section header labels (small caps, painted between sections).
+    juce::Label shapeHeader_       { "shape",       "SHAPE" };
+    juce::Label environmentHeader_ { "environment", "ENVIRONMENT" };
+    juce::Label outputHeader_      { "output",      "OUTPUT" };
+    juce::Label advancedHeader_    { "advanced",    "ADVANCED" };
 
     juce::Slider     gainSlider_;
     juce::Label      gainLabel_;
@@ -38,36 +52,28 @@ private:
     juce::Label      offGainLabel_;
     juce::Slider     offLpSlider_;
     juce::Label      offLpLabel_;
-    juce::Slider     directPathSlider_;
-    juce::Label      directPathLabel_;
     juce::Slider     reverbSendSlider_;
     juce::Label      reverbSendLabel_;
     juce::Slider     reverbAmountSlider_;
     juce::Label      reverbAmountLabel_;
     juce::Slider     extAmountSlider_;
     juce::Label      extAmountLabel_;
-    juce::Slider     extCharSlider_;
-    juce::Label      extCharLabel_;
     juce::ComboBox   distPresetBox_;
     juce::Label      distPresetLabel_;
-    juce::ToggleButton stereoBypassButton_ { "Stereo bypass" };
-    juce::ToggleButton legacyPostButton_   { "Legacy post-decoder (v0.4)" };
-    juce::Slider     distASlider_;
-    juce::Label      distALabel_;
-    juce::Slider     distAdBSlider_;
-    juce::Label      distAdBLabel_;
-    juce::Slider     distBSlider_;
-    juce::Label      distBLabel_;
-    juce::Slider     distBdBSlider_;
-    juce::Label      distBdBLabel_;
-    juce::Slider     distCSlider_;
-    juce::Label      distCLabel_;
-    juce::Slider     distCdBSlider_;
-    juce::Label      distCdBLabel_;
-    juce::Slider     distDSlider_;
-    juce::Label      distDLabel_;
-    juce::TextButton resetButton_ { "Reset" };
+
+    // Advanced (collapsible) controls.
+    juce::Slider     directPathSlider_;
+    juce::Label      directPathLabel_;
+    juce::Slider     extCharSlider_;
+    juce::Label      extCharLabel_;
+    juce::ToggleButton legacyPostButton_ { "Legacy post-decoder (v0.4)" };
+
+    juce::ToggleButton stereoBypassButton_  { "Stereo bypass" };
     juce::ToggleButton aimAtListenerButton_ { "Aim at listener" };
+    juce::TextButton   resetButton_         { "Reset" };
+    juce::TextButton   advancedButton_;
+
+    bool advancedOpen_ = false;
 
     using SliderAttachment   = juce::AudioProcessorValueTreeState::SliderAttachment;
     using ButtonAttachment   = juce::AudioProcessorValueTreeState::ButtonAttachment;
@@ -83,13 +89,6 @@ private:
     std::unique_ptr<SliderAttachment> reverbAmountAttachment_;
     std::unique_ptr<SliderAttachment> extAmountAttachment_;
     std::unique_ptr<SliderAttachment> extCharAttachment_;
-    std::unique_ptr<SliderAttachment> distAAttachment_;
-    std::unique_ptr<SliderAttachment> distAdBAttachment_;
-    std::unique_ptr<SliderAttachment> distBAttachment_;
-    std::unique_ptr<SliderAttachment> distBdBAttachment_;
-    std::unique_ptr<SliderAttachment> distCAttachment_;
-    std::unique_ptr<SliderAttachment> distCdBAttachment_;
-    std::unique_ptr<SliderAttachment> distDAttachment_;
     std::unique_ptr<ButtonAttachment> stereoBypassAttachment_;
     std::unique_ptr<ButtonAttachment> legacyPostAttachment_;
     std::unique_ptr<ButtonAttachment> aimAttachment_;
