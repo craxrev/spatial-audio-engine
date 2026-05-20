@@ -25,12 +25,18 @@ pub trait ConvolutionEngine {
 /// for `ir_len ≤ BLOCK_SIZE+1` the history fits inside one block; for
 /// longer IRs (e.g. the M11 W-binauralizer's 2865-tap filters) the
 /// scratch buffer grows accordingly.
+///
+/// IRs are stored **reversed** so the per-sample dot product is a
+/// forward `zip` over two contiguous slices — the compiler then
+/// elides bounds checks and emits a tight SIMD multiply-accumulate
+/// inner loop. Without this the inner-loop bounds checks dominate
+/// CPU (~33% of plugin time, confirmed by Instruments).
 pub struct TimeDomainConvEngine {
     num_inputs: usize,
     num_outputs: usize,
     ir_len: usize,
     history_len: usize,
-    /// Per cross-cell IR, indexed `in_idx * num_outputs + out_idx`.
+    /// Per cross-cell IR (REVERSED), indexed `in_idx * num_outputs + out_idx`.
     irs: Vec<Vec<f32>>,
     /// Per-input scratch: `[history(history_len), curr(BLOCK_SIZE)]`,
     /// total `history_len + BLOCK_SIZE` floats. After each block we
@@ -55,10 +61,17 @@ impl TimeDomainConvEngine {
     pub fn set_ir(&mut self, in_idx: usize, out_idx: usize, ir: &[f32]) {
         let idx = in_idx * self.num_outputs + out_idx;
         let cell = &mut self.irs[idx];
-        let n = ir.len().min(self.ir_len);
-        cell[..n].copy_from_slice(&ir[..n]);
-        for v in &mut cell[n..] {
+        for v in cell.iter_mut() {
             *v = 0.0;
+        }
+        // Store reversed and tail-aligned: source `ir[0..n]` lands in
+        // `cell[ir_len - n .. ir_len]` in reverse order, leaving any
+        // short-IR zero-padding at the *front* of the cell. This is
+        // what makes the inner dot product a forward `zip`.
+        let n = ir.len().min(self.ir_len);
+        let dst = &mut cell[self.ir_len - n..];
+        for (i, v) in ir.iter().take(n).enumerate() {
+            dst[n - 1 - i] = *v;
         }
     }
 }
@@ -91,22 +104,32 @@ impl ConvolutionEngine for TimeDomainConvEngine {
             out.fill(0.0);
         }
 
-        // For each output sample n, accumulate over all (in_idx, k):
-        //   y[n] += x[in_idx, n - k] * h[in_idx, out_idx, k]
-        // x is read out of `scratch` (history + current concatenated).
-        #[allow(clippy::needless_range_loop)]
-        for n in 0..BLOCK_SIZE {
-            for (out_idx, out) in outputs.iter_mut().enumerate() {
-                let mut acc = 0.0_f32;
-                for in_idx in 0..self.num_inputs {
-                    let ir = &self.irs[in_idx * self.num_outputs + out_idx];
-                    let s = &self.scratch[in_idx];
-                    let base = self.history_len + n;
-                    for k in 0..self.ir_len {
-                        acc += s[base - k] * ir[k];
-                    }
+        // Per output sample `n`, accumulate `sum_k(scratch[n + k - 0] *
+        // ir_reversed[k])` over all (in_idx, k). The IR is stored
+        // reversed (see `set_ir`), so the dot product is a forward
+        // `zip` over two contiguous slices — compiler-vectorisable.
+        //
+        // Loop order: (out_idx, in_idx, n, k). Hoisting the per-cell
+        // slice borrows out of the BLOCK_SIZE loop lets the compiler
+        // keep them in registers for the inner kernel.
+        let ir_len = self.ir_len;
+        let history_len = self.history_len;
+        for (out_idx, out) in outputs.iter_mut().enumerate() {
+            for in_idx in 0..self.num_inputs {
+                let ir_rev = self.irs[in_idx * self.num_outputs + out_idx].as_slice();
+                let scratch = self.scratch[in_idx].as_slice();
+                for (n, out_n) in out.iter_mut().enumerate() {
+                    // Window covers scratch[(history_len + n + 1 - ir_len)..=history_len + n].
+                    // Length is exactly `ir_len` by construction.
+                    let start = history_len + n + 1 - ir_len;
+                    let window = &scratch[start..start + ir_len];
+                    let acc: f32 = window
+                        .iter()
+                        .zip(ir_rev.iter())
+                        .map(|(a, b)| a * b)
+                        .sum();
+                    *out_n += acc;
                 }
-                out[n] = acc;
             }
         }
 
