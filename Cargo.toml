@@ -13,3 +13,9 @@ edition = "2024"
 publish = false
 
 [workspace.dependencies]
+
+# Keep line-level debug info in release builds so Instruments / `sample`
+# can symbolicate the engine staticlib when profiling the plugin in a
+# host. `debug = 1` is line tables only — no perf cost.
+[profile.release]
+debug = 1
