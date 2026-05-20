@@ -104,14 +104,20 @@ impl ConvolutionEngine for TimeDomainConvEngine {
             out.fill(0.0);
         }
 
-        // Per output sample `n`, accumulate `sum_k(scratch[n + k - 0] *
+        // Per output sample `n`, accumulate `sum_k(scratch[n + k] *
         // ir_reversed[k])` over all (in_idx, k). The IR is stored
         // reversed (see `set_ir`), so the dot product is a forward
-        // `zip` over two contiguous slices — compiler-vectorisable.
+        // `zip` over two contiguous slices.
         //
-        // Loop order: (out_idx, in_idx, n, k). Hoisting the per-cell
-        // slice borrows out of the BLOCK_SIZE loop lets the compiler
-        // keep them in registers for the inner kernel.
+        // The dot-product kernel uses **4 parallel accumulators** on
+        // the aligned head of the window + a scalar tail. This breaks
+        // the left-fold dependency chain so LLVM can emit NEON
+        // `fmla.4s` with a vector accumulator instead of a serial
+        // chain of scalar `fadd`s — output is within ulp of the
+        // strict-fold form (associative reordering only).
+        //
+        // Loop order: (out_idx, in_idx, n, k). Hoisting per-cell slice
+        // borrows out of the BLOCK_SIZE loop keeps them in registers.
         let ir_len = self.ir_len;
         let history_len = self.history_len;
         for (out_idx, out) in outputs.iter_mut().enumerate() {
@@ -123,11 +129,22 @@ impl ConvolutionEngine for TimeDomainConvEngine {
                     // Length is exactly `ir_len` by construction.
                     let start = history_len + n + 1 - ir_len;
                     let window = &scratch[start..start + ir_len];
-                    let acc: f32 = window
-                        .iter()
-                        .zip(ir_rev.iter())
-                        .map(|(a, b)| a * b)
-                        .sum();
+
+                    let aligned = ir_len & !3;
+                    let (w_main, w_rem) = window.split_at(aligned);
+                    let (ir_main, ir_rem) = ir_rev.split_at(aligned);
+
+                    let mut a = [0.0_f32; 4];
+                    for (w, ir) in w_main.chunks_exact(4).zip(ir_main.chunks_exact(4)) {
+                        a[0] += w[0] * ir[0];
+                        a[1] += w[1] * ir[1];
+                        a[2] += w[2] * ir[2];
+                        a[3] += w[3] * ir[3];
+                    }
+                    let mut acc = (a[0] + a[1]) + (a[2] + a[3]);
+                    for (w, ir) in w_rem.iter().zip(ir_rem.iter()) {
+                        acc += w * ir;
+                    }
                     *out_n += acc;
                 }
             }
