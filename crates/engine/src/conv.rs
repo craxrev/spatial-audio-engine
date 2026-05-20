@@ -5,6 +5,76 @@
 
 use crate::consts::BLOCK_SIZE;
 
+/// Dot product of two equal-length slices. On aarch64 this is a hand-
+/// written NEON kernel with 4 parallel vector accumulators using
+/// `vfmaq_f32` (fused multiply-add) — emits the `fmla.4s` instructions
+/// LLVM's auto-vectoriser refuses to generate because they require
+/// associative reassociation of the accumulator. Scalar fallback for
+/// every other architecture uses the same 4-parallel-accumulator
+/// pattern in safe code.
+///
+/// Output is numerically within ulp of the strict left-fold form
+/// (associative reordering only), so existing tests still pass.
+#[cfg(target_arch = "aarch64")]
+#[inline]
+fn dot_product(w: &[f32], ir: &[f32]) -> f32 {
+    debug_assert_eq!(w.len(), ir.len());
+    let n = w.len();
+    // SAFETY: every load reads exactly 4 floats starting at offsets
+    // bounded by the `while i + N <= n` checks below, so we never
+    // read past either slice.
+    unsafe {
+        use core::arch::aarch64::*;
+        let wp = w.as_ptr();
+        let ip = ir.as_ptr();
+        let mut a0 = vdupq_n_f32(0.0);
+        let mut a1 = vdupq_n_f32(0.0);
+        let mut a2 = vdupq_n_f32(0.0);
+        let mut a3 = vdupq_n_f32(0.0);
+        let mut i = 0;
+        // Hot kernel: 16 floats / iteration, 4 independent fmla.4s
+        // accumulator chains running in parallel.
+        while i + 16 <= n {
+            a0 = vfmaq_f32(a0, vld1q_f32(wp.add(i)),      vld1q_f32(ip.add(i)));
+            a1 = vfmaq_f32(a1, vld1q_f32(wp.add(i +  4)), vld1q_f32(ip.add(i +  4)));
+            a2 = vfmaq_f32(a2, vld1q_f32(wp.add(i +  8)), vld1q_f32(ip.add(i +  8)));
+            a3 = vfmaq_f32(a3, vld1q_f32(wp.add(i + 12)), vld1q_f32(ip.add(i + 12)));
+            i += 16;
+        }
+        while i + 4 <= n {
+            a0 = vfmaq_f32(a0, vld1q_f32(wp.add(i)), vld1q_f32(ip.add(i)));
+            i += 4;
+        }
+        let mut acc = vaddvq_f32(a0) + vaddvq_f32(a1) + vaddvq_f32(a2) + vaddvq_f32(a3);
+        while i < n {
+            acc += *wp.add(i) * *ip.add(i);
+            i += 1;
+        }
+        acc
+    }
+}
+
+#[cfg(not(target_arch = "aarch64"))]
+#[inline]
+fn dot_product(w: &[f32], ir: &[f32]) -> f32 {
+    debug_assert_eq!(w.len(), ir.len());
+    let aligned = w.len() & !3;
+    let (w_main, w_rem) = w.split_at(aligned);
+    let (ir_main, ir_rem) = ir.split_at(aligned);
+    let mut a = [0.0_f32; 4];
+    for (wc, ic) in w_main.chunks_exact(4).zip(ir_main.chunks_exact(4)) {
+        a[0] += wc[0] * ic[0];
+        a[1] += wc[1] * ic[1];
+        a[2] += wc[2] * ic[2];
+        a[3] += wc[3] * ic[3];
+    }
+    let mut acc = (a[0] + a[1]) + (a[2] + a[3]);
+    for (wc, ic) in w_rem.iter().zip(ir_rem.iter()) {
+        acc += wc * ic;
+    }
+    acc
+}
+
 pub trait ConvolutionEngine {
     fn num_inputs(&self) -> usize;
     fn num_outputs(&self) -> usize;
@@ -106,15 +176,8 @@ impl ConvolutionEngine for TimeDomainConvEngine {
 
         // Per output sample `n`, accumulate `sum_k(scratch[n + k] *
         // ir_reversed[k])` over all (in_idx, k). The IR is stored
-        // reversed (see `set_ir`), so the dot product is a forward
-        // `zip` over two contiguous slices.
-        //
-        // The dot-product kernel uses **4 parallel accumulators** on
-        // the aligned head of the window + a scalar tail. This breaks
-        // the left-fold dependency chain so LLVM can emit NEON
-        // `fmla.4s` with a vector accumulator instead of a serial
-        // chain of scalar `fadd`s — output is within ulp of the
-        // strict-fold form (associative reordering only).
+        // reversed (see `set_ir`), so the per-sample inner product is
+        // a forward dot of two contiguous slices — see `dot_product`.
         //
         // Loop order: (out_idx, in_idx, n, k). Hoisting per-cell slice
         // borrows out of the BLOCK_SIZE loop keeps them in registers.
@@ -125,27 +188,9 @@ impl ConvolutionEngine for TimeDomainConvEngine {
                 let ir_rev = self.irs[in_idx * self.num_outputs + out_idx].as_slice();
                 let scratch = self.scratch[in_idx].as_slice();
                 for (n, out_n) in out.iter_mut().enumerate() {
-                    // Window covers scratch[(history_len + n + 1 - ir_len)..=history_len + n].
-                    // Length is exactly `ir_len` by construction.
                     let start = history_len + n + 1 - ir_len;
                     let window = &scratch[start..start + ir_len];
-
-                    let aligned = ir_len & !3;
-                    let (w_main, w_rem) = window.split_at(aligned);
-                    let (ir_main, ir_rem) = ir_rev.split_at(aligned);
-
-                    let mut a = [0.0_f32; 4];
-                    for (w, ir) in w_main.chunks_exact(4).zip(ir_main.chunks_exact(4)) {
-                        a[0] += w[0] * ir[0];
-                        a[1] += w[1] * ir[1];
-                        a[2] += w[2] * ir[2];
-                        a[3] += w[3] * ir[3];
-                    }
-                    let mut acc = (a[0] + a[1]) + (a[2] + a[3]);
-                    for (w, ir) in w_rem.iter().zip(ir_rem.iter()) {
-                        acc += w * ir;
-                    }
-                    *out_n += acc;
+                    *out_n += dot_product(window, ir_rev);
                 }
             }
         }
