@@ -8,7 +8,8 @@ class SpatialCompass;
 class ElevationStrip;
 class DistanceCurveEditor;
 
-class SpatialAudioEditor : public juce::AudioProcessorEditor
+class SpatialAudioEditor : public juce::AudioProcessorEditor,
+                            private juce::AudioProcessorValueTreeState::Listener
 {
 public:
     explicit SpatialAudioEditor(SpatialAudioProcessor&);
@@ -20,6 +21,8 @@ public:
 private:
     void resetAllParams();
     void toggleAdvanced();
+    void refreshPresetSelection();
+    void parameterChanged(const juce::String& parameterID, float newValue) override;
     void layoutSliderRow(juce::Rectangle<int>& area, int rowH,
                          juce::Label& label, juce::Slider& slider);
     void layoutPairedRow(juce::Rectangle<int>& area, int rowH,

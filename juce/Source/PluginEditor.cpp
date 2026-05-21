@@ -41,19 +41,20 @@ inline const juce::Font& font11() { return mono11(); }
 namespace theme
 {
     // -- Surfaces ------------------------------------------------------
-    constexpr juce::uint32 bg0        = 0xff031908; // near-black with green-tube tint
-    constexpr juce::uint32 bg1        = 0xff020e05; // panel underlay (curve / elev strip)
-    constexpr juce::uint32 bg2        = 0xff052a14; // raised surface (elev strip tracks)
+    constexpr juce::uint32 bg0        = 0xff1a0d00; // near-black with amber-tube tint
+    constexpr juce::uint32 bg1        = 0xff0e0700; // panel underlay (curve / elev strip)
+    constexpr juce::uint32 bg2        = 0xff2a1700; // raised surface (elev strip tracks)
 
     // -- Phosphor intensity ramp ---------------------------------------
     // The whole UI is shades of one hue. Intensity = hierarchy.
-    constexpr juce::uint32 phosphor0  = 0xff0a3a18; // deepest — barely visible grid
-    constexpr juce::uint32 phosphor1  = 0xff186c2c; // dim — distance rings, faint structure
-    constexpr juce::uint32 phosphor2  = 0xff2aa548; // mid — text, axis lines
-    constexpr juce::uint32 phosphor3  = 0xff4fd970; // bright — emphasis, labels
-    constexpr juce::uint32 phosphor4  = 0xff8effa6; // peak — source, active drag, headline
-    constexpr juce::uint32 glow       = 0x6633ff66; // halo (alpha-blended)
-    constexpr juce::uint32 glowFaint  = 0x3333ff66; // faint halo
+    // Amber P3 phosphor — warm sunset orange, classic 1980s terminal.
+    constexpr juce::uint32 phosphor0  = 0xff3a1f00; // deepest — barely visible grid
+    constexpr juce::uint32 phosphor1  = 0xff7a4400; // dim — distance rings, faint structure
+    constexpr juce::uint32 phosphor2  = 0xffc97a08; // mid — text, axis lines
+    constexpr juce::uint32 phosphor3  = 0xffffa429; // bright — emphasis, labels
+    constexpr juce::uint32 phosphor4  = 0xffffcc66; // peak — source, active drag, headline
+    constexpr juce::uint32 glow       = 0x66ffa429; // halo (alpha-blended)
+    constexpr juce::uint32 glowFaint  = 0x33ffa429; // faint halo
 
     // -- Semantic aliases (so the rest of the file reads cleanly) ------
     constexpr juce::uint32 gridFaint  = phosphor0;
@@ -66,11 +67,11 @@ namespace theme
 
     // -- Source (peak phosphor) ----------------------------------------
     constexpr juce::uint32 src        = phosphor4;
-    constexpr juce::uint32 srcLight   = 0xffd5ffe2;
+    constexpr juce::uint32 srcLight   = 0xffffe6b8;
     constexpr juce::uint32 srcDeep    = phosphor2;
     constexpr juce::uint32 srcGlow    = glow;
-    constexpr juce::uint32 srcWedge   = 0x224fd970;
-    constexpr juce::uint32 srcArrowTr = 0xcc8effa6;
+    constexpr juce::uint32 srcWedge   = 0x22ffa429;
+    constexpr juce::uint32 srcArrowTr = 0xccffcc66;
 
     // -- Listener (dim phosphor — observer is structural, not bright) --
     constexpr juce::uint32 lst        = phosphor1;
@@ -81,10 +82,10 @@ namespace theme
     constexpr juce::uint32 audibleWarm = phosphor3; // contour stronger phosphor
     constexpr juce::uint32 audibleCool = phosphor1; // contour off-axis dim
     constexpr juce::uint32 occlusion   = phosphor2; // fog tinted phosphor
-    constexpr juce::uint32 curveFill   = 0x224fd970;
+    constexpr juce::uint32 curveFill   = 0x22ffa429;
     constexpr juce::uint32 curveLine   = phosphor4;
-    constexpr juce::uint32 nodeActive  = 0xffd5ffe2;
-    constexpr juce::uint32 scanline    = 0x18000000; // subtle dark overlay for scanlines
+    constexpr juce::uint32 nodeActive  = 0xffffe6b8;
+    constexpr juce::uint32 scanline    = 0x0a000000; // subtle dark overlay for scanlines
 }
 
 // CRT scanline overlay — every-other horizontal line painted with a
@@ -96,6 +97,23 @@ inline void paintScanlines(juce::Graphics& g, juce::Rectangle<int> bounds)
     for (int y = bounds.getY(); y < bounds.getBottom(); y += 2)
         g.drawHorizontalLine(y, (float)bounds.getX(), (float)bounds.getRight());
 }
+
+// Corner vignette — fade to black at the four corners to suggest CRT
+// screen curvature / instrument bezel. Adds depth and frames the
+// content. Drawn last (over the scanlines on the static bg).
+inline void paintVignette(juce::Graphics& g, juce::Rectangle<int> bounds)
+{
+    const auto centre = bounds.getCentre().toFloat();
+    const float r = juce::jmin(bounds.getWidth(), bounds.getHeight()) * 0.5f;
+    juce::ColourGradient grad(
+        juce::Colour(0x00000000), centre.x, centre.y,
+        juce::Colour(0xb0000000), centre.x + r * 1.15f, centre.y, true);
+    grad.addColour(0.65, juce::Colour(0x00000000));
+    grad.addColour(0.92, juce::Colour(0x55000000));
+    g.setGradientFill(grad);
+    g.fillRect(bounds);
+}
+
 
 // Draw an ellipse with a soft phosphor glow halo. `r` is the dot
 // radius; the glow extends to ~2.2r and fades out.
@@ -259,6 +277,10 @@ public:
         }
         g.drawImageAt(backgroundImage_, 0, 0);
 
+        // Corner vignette — painted UNDER the dynamic content so it
+        // darkens only the background corners, not the text/source.
+        paintVignette(g, getLocalBounds());
+
         // Source.
         const float dist = currentDistance();
         const float az   = currentAzimuth();
@@ -348,7 +370,7 @@ public:
                         + juce::String(yaw, 1) + kGlyphDeg;
         g.drawText(info, juce::Rectangle<int>(8, 8, getWidth() - 16, 14),
                    juce::Justification::topLeft);
-        g.setColour(juce::Colour(theme::phosphor1));
+        g.setColour(juce::Colour(theme::phosphor2));
         g.setFont(font10());
         // Use ASCII "Cmd" — the U+2318 ⌘ glyph is missing in many fonts.
         const auto hint = juce::String("DRAG DOT TO MOVE ") + kGlyphMid + " ARROW TO AIM  "
@@ -357,7 +379,8 @@ public:
                    juce::Rectangle<int>(8, 22, getWidth() - 16, 12),
                    juce::Justification::topLeft);
 
-        // CRT scanline overlay — last so it sits on top of everything.
+        // Scanline overlay sits on top so all phosphor elements (text,
+        // source, contour) get the CRT line pattern.
         paintScanlines(g, getLocalBounds());
     }
 
@@ -1263,6 +1286,31 @@ void styleHeaderLabel(juce::Label& l)
     l.setJustificationType(juce::Justification::centredLeft);
 }
 
+// Distance-curve preset bank. Shared between the combobox setup in
+// the constructor and the parameter-listener match logic.
+struct Preset {
+    const char* name;
+    float aD, aDb, bD, bDb, cD, cDb, dD;
+};
+const Preset kDistPresets[] = {
+    {"Default",      1.00f,  0.00f, 12.00f,-20.00f, 60.00f,-60.00f,100.00f},
+    {"Direct Sources",   0.00f, -2.47f,  2.06f, -2.75f, 19.31f,-38.93f, 25.36f},
+    {"Water Sources",    2.50f,-15.79f,  4.66f,-13.27f,  8.98f,-23.16f, 41.16f},
+    {"Birds",            5.13f,-10.53f,  7.53f,-19.58f, 19.95f,-37.46f, 25.63f},
+    {"Near Field",       3.19f, -8.64f,  5.07f,-29.89f,  7.80f,-56.19f,  8.88f},
+    {"Meeting Room",     1.52f, -0.01f,  2.34f, -3.17f,  4.32f, -6.96f, 17.95f},
+    {"Big Hall",         1.20f, -0.34f,  4.60f,  3.44f,  8.82f, -1.44f, 17.95f},
+    {"Users (Voice)",    1.52f, -0.01f, 21.62f,-42.25f, 38.81f,-44.25f, 41.00f},
+    {"Main (Exp.)",      1.34f,  0.00f, 30.00f,-40.00f, 60.00f,-57.00f,150.00f},
+    {"Secondary (Exp.)", 1.34f,  0.00f, 10.00f,-12.00f, 55.00f,-50.00f,150.00f},
+};
+constexpr int kDistPresetCount = (int)(sizeof(kDistPresets) / sizeof(Preset));
+
+const char* const kDistParamIds[7] = {
+    "dist_a", "dist_a_db", "dist_b", "dist_b_db",
+    "dist_c", "dist_c_db", "dist_d",
+};
+
 } // namespace
 
 SpatialAudioEditor::SpatialAudioEditor(SpatialAudioProcessor& p)
@@ -1341,23 +1389,10 @@ SpatialAudioEditor::SpatialAudioEditor(SpatialAudioProcessor& p)
     offLpAttachment_ = std::make_unique<SliderAttachment>(p.apvts, "dir_outer_lp", offLpSlider_);
 
     // Distance-curve preset combobox (sits above the curve editor).
-    struct Preset { const char* name;
-                    float aD, aDb, bD, bDb, cD, cDb, dD; };
-    static const Preset kPresets[] = {
-        {"Default",      1.00f,  0.00f, 12.00f,-20.00f, 60.00f,-60.00f,100.00f},
-        {"Direct Sources",   0.00f, -2.47f,  2.06f, -2.75f, 19.31f,-38.93f, 25.36f},
-        {"Water Sources",    2.50f,-15.79f,  4.66f,-13.27f,  8.98f,-23.16f, 41.16f},
-        {"Birds",            5.13f,-10.53f,  7.53f,-19.58f, 19.95f,-37.46f, 25.63f},
-        {"Near Field",       3.19f, -8.64f,  5.07f,-29.89f,  7.80f,-56.19f,  8.88f},
-        {"Meeting Room",     1.52f, -0.01f,  2.34f, -3.17f,  4.32f, -6.96f, 17.95f},
-        {"Big Hall",         1.20f, -0.34f,  4.60f,  3.44f,  8.82f, -1.44f, 17.95f},
-        {"Users (Voice)",    1.52f, -0.01f, 21.62f,-42.25f, 38.81f,-44.25f, 41.00f},
-        {"Main (Exp.)",      1.34f,  0.00f, 30.00f,-40.00f, 60.00f,-57.00f,150.00f},
-        {"Secondary (Exp.)", 1.34f,  0.00f, 10.00f,-12.00f, 55.00f,-50.00f,150.00f},
-    };
+    // Preset bank lives in the anonymous namespace above.
     initLabel(distPresetLabel_, "Preset");
     int presetId = 1;
-    for (const auto& pr : kPresets)
+    for (const auto& pr : kDistPresets)
         distPresetBox_.addItem(pr.name, presetId++);
     distPresetBox_.setColour(juce::ComboBox::backgroundColourId, juce::Colour(theme::bg2));
     distPresetBox_.setColour(juce::ComboBox::textColourId,       juce::Colour(theme::textBright));
@@ -1367,8 +1402,8 @@ SpatialAudioEditor::SpatialAudioEditor(SpatialAudioProcessor& p)
     addAndMakeVisible(distPresetBox_);
     distPresetBox_.onChange = [this] {
         const int sel = distPresetBox_.getSelectedId() - 1;
-        if (sel < 0 || sel >= (int) (sizeof(kPresets) / sizeof(Preset))) return;
-        const auto& pr = kPresets[sel];
+        if (sel < 0 || sel >= kDistPresetCount) return;
+        const auto& pr = kDistPresets[sel];
         auto setp = [this](const char* id, float v) {
             if (auto* prm = proc_.apvts.getParameter(id)) {
                 prm->beginChangeGesture();
@@ -1381,6 +1416,12 @@ SpatialAudioEditor::SpatialAudioEditor(SpatialAudioProcessor& p)
         setp("dist_c", pr.cD);   setp("dist_c_db", pr.cDb);
         setp("dist_d", pr.dD);
     };
+
+    // Initial preset selection (matches first-launch defaults or any
+    // DAW-restored state). Listener below keeps it in sync afterwards.
+    refreshPresetSelection();
+    for (auto* id : kDistParamIds)
+        p.apvts.addParameterListener(id, this);
 
     // ENVIRONMENT section.
     initLabel(occlusionLabel_, "Occlusion");
@@ -1458,7 +1499,46 @@ SpatialAudioEditor::SpatialAudioEditor(SpatialAudioProcessor& p)
     setSize(580, 760);
 }
 
-SpatialAudioEditor::~SpatialAudioEditor() = default;
+SpatialAudioEditor::~SpatialAudioEditor()
+{
+    for (auto* id : kDistParamIds)
+        proc_.apvts.removeParameterListener(id, this);
+}
+
+void SpatialAudioEditor::refreshPresetSelection()
+{
+    // dB params have step interval 0.1, so values like -0.34 get
+    // snapped to -0.3 — eps must exceed half that step to find a
+    // match. Distance params are finer (interval 0.01) so they match
+    // exactly under the same eps.
+    constexpr float kEps = 0.06f;
+    const auto& s = proc_.apvts;
+    const float a  = s.getRawParameterValue("dist_a")    ->load();
+    const float ad = s.getRawParameterValue("dist_a_db") ->load();
+    const float b  = s.getRawParameterValue("dist_b")    ->load();
+    const float bd = s.getRawParameterValue("dist_b_db") ->load();
+    const float c  = s.getRawParameterValue("dist_c")    ->load();
+    const float cd = s.getRawParameterValue("dist_c_db") ->load();
+    const float d  = s.getRawParameterValue("dist_d")    ->load();
+    int matched = 0;
+    for (int i = 0; i < kDistPresetCount; ++i) {
+        const auto& pr = kDistPresets[i];
+        if (std::abs(pr.aD  - a)  < kEps && std::abs(pr.aDb - ad) < kEps &&
+            std::abs(pr.bD  - b)  < kEps && std::abs(pr.bDb - bd) < kEps &&
+            std::abs(pr.cD  - c)  < kEps && std::abs(pr.cDb - cd) < kEps &&
+            std::abs(pr.dD  - d)  < kEps) { matched = i + 1; break; }
+    }
+    distPresetBox_.setSelectedId(matched, juce::dontSendNotification);
+}
+
+void SpatialAudioEditor::parameterChanged(const juce::String&, float)
+{
+    // APVTS listener fires off-thread for automation; defer to the
+    // message thread so combobox updates stay safe.
+    juce::MessageManager::callAsync([safe = juce::Component::SafePointer<SpatialAudioEditor>(this)] {
+        if (safe != nullptr) safe->refreshPresetSelection();
+    });
+}
 
 void SpatialAudioEditor::resetAllParams()
 {
