@@ -14,6 +14,7 @@
 
 use crate::consts::{BLOCK_SIZE, NUM_AMBI, SH_W_NORM};
 use crate::math::{Quat, Vec3};
+use crate::ramp::Ramp;
 use crate::sh::sh_basis_n3d_into;
 use crate::sh_rotation::ShRotation;
 
@@ -180,10 +181,10 @@ pub struct AudioBed {
     format: BedFormat,
     speakers: Vec<Speaker>,
     pub headlocked: bool,
-    /// Master linear gain. Unramped for M12 — the per-source gain
-    /// ramps in §6.5 don't apply to the bed; if smoothing is needed
-    /// later add a Ramp here.
-    pub gain: f32,
+    /// Master linear gain, ramped per sample (§12 step 6
+    /// `apply_bed_master_gain_ramp`). Default 1.0. Ramp length matches
+    /// the per-source gain ramp (`BLOCK_SIZE` samples ≈ 2.7 ms @ 48k).
+    pub gain: Ramp,
 
     /// Cached prev rotation matrix for the §12 ambisonic-bed
     /// crossfade. Starts at identity, updated each block from the
@@ -197,7 +198,7 @@ impl AudioBed {
             format,
             speakers: speakers_for(format),
             headlocked: false,
-            gain: 1.0,
+            gain: Ramp::new(1.0, BLOCK_SIZE as u32),
             prev_rot: ShRotation::identity(),
         }
     }
@@ -219,12 +220,22 @@ impl AudioBed {
         listener_quat: Quat,
         ambi_bus: &mut [[f32; BLOCK_SIZE]],
     ) {
-        if inputs.len() != self.channel_count() || self.gain == 0.0 {
+        if inputs.len() != self.channel_count() {
+            return;
+        }
+        // Skip when the master gain ramp is idle at zero.
+        if !self.gain.is_active() && self.gain.current == 0.0 {
             return;
         }
         if self.format.is_ambisonic() {
             self.encode_ambisonic(inputs, listener_quat, ambi_bus);
             return;
+        }
+        // Tick the master gain ramp once per sample into a local block,
+        // so the per-speaker / per-ambi inner loops can reuse it.
+        let mut g_block = [0.0_f32; BLOCK_SIZE];
+        for g in g_block.iter_mut() {
+            *g = self.gain.tick();
         }
         let inv = listener_quat.conjugate();
         let mut sh = [0.0_f32; NUM_AMBI];
@@ -247,16 +258,15 @@ impl AudioBed {
                     *v *= SH_W_NORM;
                 }
             }
-            let g = self.gain;
             let src = &inputs[ch];
             for (k, bus_ch) in ambi_bus.iter_mut().enumerate() {
-                let coef = g * sh[k];
+                let coef = sh[k];
                 if coef == 0.0 {
                     continue;
                 }
                 #[allow(clippy::needless_range_loop)]
                 for i in 0..BLOCK_SIZE {
-                    bus_ch[i] += coef * src[i];
+                    bus_ch[i] += g_block[i] * coef * src[i];
                 }
             }
         }
@@ -280,7 +290,6 @@ impl AudioBed {
         };
 
         let n_ch = inputs.len();
-        let g = self.gain;
         let mut in_buf = [0.0_f32; NUM_AMBI];
         let mut out_prev = [0.0_f32; NUM_AMBI];
         let mut out_target = [0.0_f32; NUM_AMBI];
@@ -301,6 +310,7 @@ impl AudioBed {
 
             let t = (i as f32) / (BLOCK_SIZE as f32);
             let one_m_t = 1.0 - t;
+            let g = self.gain.tick();
             for (k, bus_ch) in ambi_bus.iter_mut().enumerate() {
                 bus_ch[i] += g * (one_m_t * out_prev[k] + t * out_target[k]);
             }

@@ -101,11 +101,10 @@ impl Engine {
         };
     }
 
-    /// Bed master gain (linear). Applied to every bed channel before
-    /// SH encoding.
+    /// Bed master gain (linear), ramped per sample (§12 step 6).
     pub fn set_audio_bed_gain(&mut self, gain: f32) {
         if let Some(bed) = self.audio_bed.as_mut() {
-            bed.gain = gain.max(0.0);
+            bed.gain.set_target(gain.max(0.0));
         }
     }
 
