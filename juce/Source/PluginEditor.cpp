@@ -18,58 +18,111 @@ const juce::String kGlyphDash = juce::String::fromUTF8("\xE2\x80\x94"); // —
 const juce::String kGlyphDown = juce::String::fromUTF8("\xE2\x96\xBC"); // ▼
 const juce::String kGlyphUp   = juce::String::fromUTF8("\xE2\x96\xB2"); // ▲
 
-// Cached fonts. Avoid heap-allocating a new juce::Font every paint() call
-// — at 30–60 Hz across three custom components this dominates GUI CPU.
-const juce::Font& font9()  { static juce::Font f = juce::Font(juce::FontOptions(9.0f));  return f; }
-const juce::Font& font10() { static juce::Font f = juce::Font(juce::FontOptions(10.0f)); return f; }
-const juce::Font& font11() { static juce::Font f = juce::Font(juce::FontOptions(11.0f)); return f; }
+// Cached monospace fonts. The CRT-phosphor aesthetic demands a
+// terminal/instrument feel — Menlo is bundled on every macOS install
+// and renders cleanly at small sizes. Fallback to system monospace
+// metric on other platforms.
+const juce::Font& mono9()  { static juce::Font f = juce::Font(juce::FontOptions("Menlo", 9.5f,  juce::Font::plain)); return f; }
+const juce::Font& mono10() { static juce::Font f = juce::Font(juce::FontOptions("Menlo", 10.5f, juce::Font::plain)); return f; }
+const juce::Font& mono11() { static juce::Font f = juce::Font(juce::FontOptions("Menlo", 11.5f, juce::Font::plain)); return f; }
+// Keep the old names as aliases so call-sites don't all change.
+inline const juce::Font& font9()  { return mono9();  }
+inline const juce::Font& font10() { return mono10(); }
+inline const juce::Font& font11() { return mono11(); }
 
 // =============================================================================
-// Theme — "Observatory" palette.
-// Deep ink-blue night sky for the compass, cool indigo grid structure
-// suggesting a precision instrument / celestial dial. Source is a
-// desaturated star-gold (warm but not the Anthropic-brand orange);
-// listener is a calm periwinkle. All colours live here so visual
-// re-themes happen in one place.
+// Theme — "CRT Phosphor" palette.
+// Pure monochrome phosphor green on near-black, vector wireframes,
+// glow halos. Aesthetic reference: 1970s radar / sonar consoles,
+// PDP-11 oscilloscope displays, terminal CRTs. Everything is a thin
+// stroke; nothing is a filled gradient. The single accent dimension
+// is *intensity* — same hue, different brightness for hierarchy.
 // =============================================================================
 namespace theme
 {
     // -- Surfaces ------------------------------------------------------
-    constexpr juce::uint32 bg0       = 0xff0a0d12; // deep ink (compass + main bg)
-    constexpr juce::uint32 bg1       = 0xff0f1320; // panel underlay (curve editor / elev strip)
-    constexpr juce::uint32 bg2       = 0xff1a2030; // raised surface (elev strip tracks)
+    constexpr juce::uint32 bg0        = 0xff031908; // near-black with green-tube tint
+    constexpr juce::uint32 bg1        = 0xff020e05; // panel underlay (curve / elev strip)
+    constexpr juce::uint32 bg2        = 0xff052a14; // raised surface (elev strip tracks)
 
-    // -- Grid / structure ----------------------------------------------
-    constexpr juce::uint32 gridFaint  = 0xff1d2638; // inner compass rings, subtle
-    constexpr juce::uint32 gridMid    = 0xff2c364a; // axis lines, plot grid
-    constexpr juce::uint32 gridStrong = 0xff3a4760; // outer compass ring, emphasis lines
+    // -- Phosphor intensity ramp ---------------------------------------
+    // The whole UI is shades of one hue. Intensity = hierarchy.
+    constexpr juce::uint32 phosphor0  = 0xff0a3a18; // deepest — barely visible grid
+    constexpr juce::uint32 phosphor1  = 0xff186c2c; // dim — distance rings, faint structure
+    constexpr juce::uint32 phosphor2  = 0xff2aa548; // mid — text, axis lines
+    constexpr juce::uint32 phosphor3  = 0xff4fd970; // bright — emphasis, labels
+    constexpr juce::uint32 phosphor4  = 0xff8effa6; // peak — source, active drag, headline
+    constexpr juce::uint32 glow       = 0x6633ff66; // halo (alpha-blended)
+    constexpr juce::uint32 glowFaint  = 0x3333ff66; // faint halo
 
-    // -- Text ----------------------------------------------------------
-    constexpr juce::uint32 textBright = 0xffdcd6c8; // YOU label, primary readout
-    constexpr juce::uint32 text       = 0xff8b95a8; // cardinal labels, section headers
-    constexpr juce::uint32 textDim    = 0xff666c7a; // hints, secondary readout
-    constexpr juce::uint32 textDimmer = 0xff4a5160; // de-emphasized
+    // -- Semantic aliases (so the rest of the file reads cleanly) ------
+    constexpr juce::uint32 gridFaint  = phosphor0;
+    constexpr juce::uint32 gridMid    = phosphor1;
+    constexpr juce::uint32 gridStrong = phosphor2;
+    constexpr juce::uint32 text       = phosphor2;
+    constexpr juce::uint32 textBright = phosphor4;
+    constexpr juce::uint32 textDim    = phosphor1;
+    constexpr juce::uint32 textDimmer = phosphor0;
 
-    // -- Source (star-gold) --------------------------------------------
-    constexpr juce::uint32 src        = 0xffe6b54a; // primary fill / arrow body
-    constexpr juce::uint32 srcLight   = 0xfff0d18a; // arrowhead highlight, active drag
-    constexpr juce::uint32 srcDeep    = 0xff5e4520; // border / shadow
-    constexpr juce::uint32 srcGlow    = 0x33e6b54a; // soft halo around source dot
-    constexpr juce::uint32 srcWedge   = 0x22e6b54a; // directivity wedge underlay
-    constexpr juce::uint32 srcArrowTr = 0x9be6b54a; // semi-transparent arrow body
+    // -- Source (peak phosphor) ----------------------------------------
+    constexpr juce::uint32 src        = phosphor4;
+    constexpr juce::uint32 srcLight   = 0xffd5ffe2;
+    constexpr juce::uint32 srcDeep    = phosphor2;
+    constexpr juce::uint32 srcGlow    = glow;
+    constexpr juce::uint32 srcWedge   = 0x224fd970;
+    constexpr juce::uint32 srcArrowTr = 0xcc8effa6;
 
-    // -- Listener (periwinkle) -----------------------------------------
-    constexpr juce::uint32 lst        = 0xff7a8fc8; // primary fill
-    constexpr juce::uint32 lstLight   = 0xffa4b3da; // YOU label
-    constexpr juce::uint32 lstDeep    = 0xff2a3556; // border
+    // -- Listener (dim phosphor — observer is structural, not bright) --
+    constexpr juce::uint32 lst        = phosphor1;
+    constexpr juce::uint32 lstLight   = phosphor2;
+    constexpr juce::uint32 lstDeep    = phosphor0;
 
     // -- Effects -------------------------------------------------------
-    constexpr juce::uint32 audibleWarm = 0xffe6b54a; // contour warm tint (alpha-blended)
-    constexpr juce::uint32 audibleCool = 0xff4a5468; // contour cool tint (off-axis)
-    constexpr juce::uint32 occlusion   = 0xffa0a4ba; // gray-violet fog
-    constexpr juce::uint32 curveFill   = 0x33e6b54a; // under-curve area
-    constexpr juce::uint32 curveLine   = 0xffe6b54a; // curve stroke
-    constexpr juce::uint32 nodeActive  = 0xfff5d976; // dragged node
+    constexpr juce::uint32 audibleWarm = phosphor3; // contour stronger phosphor
+    constexpr juce::uint32 audibleCool = phosphor1; // contour off-axis dim
+    constexpr juce::uint32 occlusion   = phosphor2; // fog tinted phosphor
+    constexpr juce::uint32 curveFill   = 0x224fd970;
+    constexpr juce::uint32 curveLine   = phosphor4;
+    constexpr juce::uint32 nodeActive  = 0xffd5ffe2;
+    constexpr juce::uint32 scanline    = 0x18000000; // subtle dark overlay for scanlines
+}
+
+// CRT scanline overlay — every-other horizontal line painted with a
+// low-alpha dark stripe. Cheap (just N drawLine calls) and adds the
+// signature "this is a phosphor display, not a flat-panel" cue.
+inline void paintScanlines(juce::Graphics& g, juce::Rectangle<int> bounds)
+{
+    g.setColour(juce::Colour(theme::scanline));
+    for (int y = bounds.getY(); y < bounds.getBottom(); y += 2)
+        g.drawHorizontalLine(y, (float)bounds.getX(), (float)bounds.getRight());
+}
+
+// Draw an ellipse with a soft phosphor glow halo. `r` is the dot
+// radius; the glow extends to ~2.2r and fades out.
+inline void drawPhosphorDot(juce::Graphics& g, juce::Point<float> p, float r,
+                             juce::uint32 fill, juce::uint32 halo)
+{
+    const float h = r * 2.2f;
+    g.setColour(juce::Colour(halo));
+    g.fillEllipse(p.x - h, p.y - h, 2 * h, 2 * h);
+    g.setColour(juce::Colour(halo).withMultipliedAlpha(0.55f));
+    g.fillEllipse(p.x - h * 1.45f, p.y - h * 1.45f, 2 * h * 1.45f, 2 * h * 1.45f);
+    g.setColour(juce::Colour(fill));
+    g.fillEllipse(p.x - r, p.y - r, 2 * r, 2 * r);
+}
+
+// Draw a line with a phosphor glow underlay. Used for the heading
+// arrow and other emphasis strokes.
+inline void drawPhosphorLine(juce::Graphics& g,
+                              juce::Point<float> a, juce::Point<float> b,
+                              float stroke, juce::uint32 fill, juce::uint32 halo)
+{
+    g.setColour(juce::Colour(halo));
+    g.drawLine(a.x, a.y, b.x, b.y, stroke * 3.0f);
+    g.setColour(juce::Colour(halo).withMultipliedAlpha(0.6f));
+    g.drawLine(a.x, a.y, b.x, b.y, stroke * 1.8f);
+    g.setColour(juce::Colour(fill));
+    g.drawLine(a.x, a.y, b.x, b.y, stroke);
 }
 
 // Native azimuth convention: 0 = front, +90 = left, ±180 = back.
@@ -235,10 +288,8 @@ public:
             }
         }
 
-        // Audibility contour — real top-down map of where the source is
-        // audible, in compass meters. Two nested thresholds: a "loud" zone
-        // (−6 dB) and an "audible" outer envelope (−24 dB). Combines
-        // gain × direct × directivity_gain(θ) × 1/r.
+        // Audibility contour — wireframe outline (phosphor) at two
+        // intensity levels. No fills: this is a stroke-only aesthetic.
         const float yaw     = displayedYaw_;
         const float outerLp = state_.getRawParameterValue("dir_outer_lp")->load();
         const juce::Colour warm  (theme::audibleWarm);
@@ -248,16 +299,17 @@ public:
         constexpr float kAudibleThresh = 0.0631f; // −24 dB
         constexpr float kLoudThresh    = 0.5f;    // −6 dB
 
-        g.setColour(tint.withAlpha(0.14f));
-        g.fillPath(buildAudibilityContour(src, yaw, kAudibleThresh));
-        g.setColour(tint.withAlpha(0.30f));
-        g.fillPath(buildAudibilityContour(src, yaw, kLoudThresh));
+        g.setColour(tint.withAlpha(0.22f));
+        g.strokePath(buildAudibilityContour(src, yaw, kAudibleThresh),
+                     juce::PathStrokeType(0.8f));
+        g.setColour(tint.withAlpha(0.55f));
+        g.strokePath(buildAudibilityContour(src, yaw, kLoudThresh),
+                     juce::PathStrokeType(1.2f));
 
-        // Heading arrow + tip handle.
+        // Heading arrow — phosphor stroke with glow underlay.
         const float arrowLen = 28.0f;
         const auto arrowTip = src + compassDir(yaw) * arrowLen;
-        g.setColour(juce::Colour(theme::srcArrowTr));
-        g.drawLine(src.x, src.y, arrowTip.x, arrowTip.y, 2.0f);
+        drawPhosphorLine(g, src, arrowTip, 1.8f, theme::src, theme::glow);
         // Arrowhead.
         {
             const auto dir = compassDir(yaw);
@@ -268,43 +320,45 @@ public:
                              arrowTip.y - dir.y * 3.0f + perp.y * 5.0f,
                              arrowTip.x - dir.x * 3.0f - perp.x * 5.0f,
                              arrowTip.y - dir.y * 3.0f - perp.y * 5.0f);
+            g.setColour(juce::Colour(theme::glow));
+            g.fillPath(head, juce::AffineTransform::scale(1.4f, 1.4f, arrowTip.x, arrowTip.y));
             g.setColour(juce::Colour(theme::src));
             g.fillPath(head);
         }
 
-        // Source dot — soft halo underlay suggests acoustic emission,
-        // then a crisp star-gold fill with a dark border.
-        g.setColour(juce::Colour(theme::srcGlow));
-        g.fillEllipse(src.x - 14.0f, src.y - 14.0f, 28.0f, 28.0f);
-        g.setColour(juce::Colour(theme::src));
-        g.fillEllipse(src.x - 8.0f, src.y - 8.0f, 16.0f, 16.0f);
-        g.setColour(juce::Colour(theme::srcDeep));
-        g.drawEllipse(src.x - 8.0f, src.y - 8.0f, 16.0f, 16.0f, 1.5f);
+        // Source — phosphor blip with glow halo. Outer ring suggests
+        // a contact / target lock; the inner dot is the peak intensity.
+        drawPhosphorDot(g, src, 6.0f, theme::src, theme::glow);
+        g.setColour(juce::Colour(theme::phosphor4));
+        g.drawEllipse(src.x - 10.0f, src.y - 10.0f, 20.0f, 20.0f, 1.2f);
 
         g.setColour(juce::Colour(theme::srcLight));
         g.setFont(font10());
         const bool above = src.y > bounds.getBottom() - 22.0f;
-        const float labelY = above ? src.y - 22.0f : src.y + 10.0f;
-        g.drawText("SOURCE",
+        const float labelY = above ? src.y - 22.0f : src.y + 12.0f;
+        g.drawText("SRC",
                    juce::Rectangle<float>(src.x - 30.0f, labelY, 60.0f, 12.0f),
                    juce::Justification::centred);
 
-        // Top-left readouts.
-        g.setColour(juce::Colour(theme::text));
+        // Top-left readouts — monospace technical readout.
+        g.setColour(juce::Colour(theme::phosphor3));
         g.setFont(font11());
-        const auto info = juce::String("pos: ") + juce::String(dist, 2) + " m  "
-                        + juce::String(az, 1) + kGlyphDeg + " (" + azimuthCardinal(az) + ")   yaw: "
+        const auto info = juce::String("R ") + juce::String(dist, 2) + "M  AZ "
+                        + juce::String(az, 1) + kGlyphDeg + "  YAW "
                         + juce::String(yaw, 1) + kGlyphDeg;
         g.drawText(info, juce::Rectangle<int>(8, 8, getWidth() - 16, 14),
                    juce::Justification::topLeft);
-        g.setColour(juce::Colour(theme::textDim));
+        g.setColour(juce::Colour(theme::phosphor1));
         g.setFont(font10());
         // Use ASCII "Cmd" — the U+2318 ⌘ glyph is missing in many fonts.
-        const auto hint = juce::String("drag dot to move ") + kGlyphMid + " arrow to aim  "
-                        + kGlyphDash + "  hold Cmd to snap";
+        const auto hint = juce::String("DRAG DOT TO MOVE ") + kGlyphMid + " ARROW TO AIM  "
+                        + kGlyphDash + "  HOLD CMD TO SNAP";
         g.drawText(hint,
                    juce::Rectangle<int>(8, 22, getWidth() - 16, 12),
                    juce::Justification::topLeft);
+
+        // CRT scanline overlay — last so it sits on top of everything.
+        paintScanlines(g, getLocalBounds());
     }
 
     void mouseDown(const juce::MouseEvent& e) override
@@ -601,68 +655,63 @@ private:
                                 juce::Point<float> centre,
                                 float outerR) const
     {
-        // Subtle radial gradient — deeper at edges, slightly lifted at
-        // centre — adds atmospheric depth without pulling focus.
-        const auto bg0 = juce::Colour(theme::bg0);
-        const auto bg0Edge = bg0.withMultipliedBrightness(0.78f);
-        juce::ColourGradient grad(bg0, centre.x, centre.y,
-                                  bg0Edge, centre.x + outerR, centre.y, true);
-        g.setGradientFill(grad);
-        g.fillRect(getLocalBounds());
+        // Flat near-black field — phosphor displays don't have
+        // gradients. Vignette comes from low-alpha corner darkening.
+        g.fillAll(juce::Colour(theme::bg0));
 
-        // Distance rings every 5 m (kCompassMaxMeters = 25 m → 5 rings).
-        g.setColour(juce::Colour(theme::gridFaint));
-        for (float d = 5.0f; d <= kCompassMaxMeters; d += 5.0f)
+        // Distance rings — dim phosphor, hierarchical: outer ring full
+        // strength, inner rings progressively dimmer.
+        for (int i = 1; i <= 5; ++i)
         {
-            const float ringR = outerR * (d / kCompassMaxMeters);
+            const float ringR = outerR * (i / 5.0f);
+            const auto col = (i == 5) ? juce::Colour(theme::phosphor2)
+                                       : juce::Colour(theme::phosphor1).withMultipliedAlpha(0.4f + 0.12f * i);
+            g.setColour(col);
             g.drawEllipse(centre.x - ringR, centre.y - ringR,
-                          2.0f * ringR, 2.0f * ringR, 1.0f);
+                          2.0f * ringR, 2.0f * ringR, i == 5 ? 1.0f : 0.6f);
         }
-        // Outer ring — slightly stronger emphasis.
-        g.setColour(juce::Colour(theme::gridStrong));
-        g.drawEllipse(centre.x - outerR, centre.y - outerR,
-                      2.0f * outerR, 2.0f * outerR, 1.5f);
 
-        // Minor tick marks every 15° — gives the compass a navigation-
-        // instrument / sextant feel. Slightly longer at the cardinals.
-        g.setColour(juce::Colour(theme::gridMid));
-        for (int a = 0; a < 360; a += 15)
+        // Sweep tick marks every 6° (60 ticks total). Cardinals get a
+        // double-length tick. Mid-distance grid points get a tiny dot.
+        // Authentic radar-scope tick density.
+        for (int a = 0; a < 360; a += 6)
         {
-            const bool cardinal = (a % 90 == 0);
-            const float tickLen = cardinal ? 8.0f : 4.0f;
+            const bool cardinal  = (a % 90 == 0);
+            const bool secondary = (a % 30 == 0);
+            const float tickLen = cardinal ? 10.0f : secondary ? 6.0f : 3.0f;
             const float ang = juce::degreesToRadians((float)a);
             const float ux = -std::sin(ang), uy = -std::cos(ang);
             const float x0 = centre.x + ux * outerR;
             const float y0 = centre.y + uy * outerR;
             const float x1 = centre.x + ux * (outerR - tickLen);
             const float y1 = centre.y + uy * (outerR - tickLen);
+            g.setColour(juce::Colour(cardinal ? theme::phosphor3
+                                              : secondary ? theme::phosphor2
+                                                          : theme::phosphor1));
             g.drawLine(x0, y0, x1, y1, cardinal ? 1.2f : 0.8f);
         }
 
-        // Cardinal axis lines — subtle, just enough to read centre.
-        g.setColour(juce::Colour(theme::gridFaint));
+        // Cardinal axis lines — phosphor wireframe crosshair.
+        g.setColour(juce::Colour(theme::phosphor0));
         g.drawLine(centre.x, centre.y - outerR, centre.x, centre.y + outerR, 0.6f);
         g.drawLine(centre.x - outerR, centre.y, centre.x + outerR, centre.y, 0.6f);
 
-        // Distance ring numbers (5, 10, 15, 20, 25 m). Placed along the
-        // forward-right diagonal where they overlap the least with the
-        // listener head and source-position label space.
-        g.setColour(juce::Colour(theme::textDimmer));
+        // Distance numerals along the forward-right diagonal.
+        g.setColour(juce::Colour(theme::phosphor1));
         g.setFont(font9());
         for (int d = 5; d <= (int)kCompassMaxMeters; d += 5)
         {
             const float ringR = outerR * ((float)d / kCompassMaxMeters);
-            // 45° forward-right — front-right quadrant.
             const float ang = juce::degreesToRadians(-45.0f);
             const float lx = centre.x - std::sin(ang) * ringR;
             const float ly = centre.y - std::cos(ang) * ringR;
-            g.drawText(juce::String(d) + "m",
-                       juce::Rectangle<float>(lx - 14.0f, ly - 6.0f, 28.0f, 12.0f),
+            g.drawText(juce::String(d) + "M",
+                       juce::Rectangle<float>(lx - 16.0f, ly - 6.0f, 32.0f, 12.0f),
                        juce::Justification::centred);
         }
 
-        // Cardinal labels. Letter-spaced caps for the instrument feel.
-        g.setColour(juce::Colour(theme::text));
+        // Cardinal labels — bright phosphor, monospace caps.
+        g.setColour(juce::Colour(theme::phosphor3));
         g.setFont(font11());
         g.drawText("FRONT", juce::Rectangle<float>(centre.x - 40, centre.y - outerR - 16, 80, 12),
                    juce::Justification::centred);
@@ -673,18 +722,21 @@ private:
         g.drawText("RIGHT", juce::Rectangle<float>(centre.x + outerR - 46, centre.y - 6, 40, 12),
                    juce::Justification::centredRight);
 
-        // Listener head — periwinkle disc with darker rim + nose triangle.
-        g.setColour(juce::Colour(theme::lst));
-        g.fillEllipse(centre.x - 13.0f, centre.y - 13.0f, 26.0f, 26.0f);
-        juce::Path nose;
-        nose.addTriangle(centre.x - 6.0f, centre.y - 9.0f,
-                         centre.x + 6.0f, centre.y - 9.0f,
-                         centre.x,        centre.y - 18.0f);
-        g.fillPath(nose);
-        g.setColour(juce::Colour(theme::lstDeep));
-        g.drawEllipse(centre.x - 13.0f, centre.y - 13.0f, 26.0f, 26.0f, 1.5f);
-        g.strokePath(nose, juce::PathStrokeType(1.5f));
-        g.setColour(juce::Colour(theme::lstLight));
+        // Listener — vector wireframe head. Outer ring + forward-facing
+        // chevron. No fills; pure stroke art. The "you are here" idea
+        // expressed in radar terminology rather than figurative drawing.
+        g.setColour(juce::Colour(theme::phosphor2));
+        g.drawEllipse(centre.x - 13.0f, centre.y - 13.0f, 26.0f, 26.0f, 1.2f);
+        // Centre crosshair (radar own-position).
+        g.drawLine(centre.x - 5.0f, centre.y, centre.x + 5.0f, centre.y, 1.0f);
+        g.drawLine(centre.x, centre.y - 5.0f, centre.x, centre.y + 5.0f, 1.0f);
+        // Forward chevron at +Y screen (FRONT direction).
+        juce::Path chev;
+        chev.startNewSubPath(centre.x - 5.0f, centre.y - 10.0f);
+        chev.lineTo(centre.x,        centre.y - 16.0f);
+        chev.lineTo(centre.x + 5.0f, centre.y - 10.0f);
+        g.strokePath(chev, juce::PathStrokeType(1.2f));
+        g.setColour(juce::Colour(theme::phosphor3));
         g.setFont(font10());
         g.drawText("YOU",
                    juce::Rectangle<float>(centre.x - 30.0f, centre.y + 18.0f, 60.0f, 12.0f),
@@ -738,6 +790,7 @@ public:
 
         drawPositionColumn(g, leftCol);
         drawPitchColumn   (g, rightCol);
+        paintScanlines(g, getLocalBounds());
     }
 
     void mouseDown(const juce::MouseEvent& e) override
@@ -1019,6 +1072,7 @@ public:
         drawNode(g, b, "B", Node::B);
         drawNode(g, c, "C", Node::C);
         drawNode(g, d, "D", Node::D);
+        paintScanlines(g, getLocalBounds());
     }
 
     void mouseDown(const juce::MouseEvent& e) override
