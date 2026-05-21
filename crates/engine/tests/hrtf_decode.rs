@@ -23,6 +23,25 @@ fn dc_input() -> Vec<[[f32; BLOCK_SIZE]; 2]> {
     vec![[[1.0_f32; BLOCK_SIZE]; 2]]
 }
 
+/// Drive a stereo impulse into source 0, then accumulate stereo-out
+/// energy across `tail_blocks` silent blocks. Broadband-equivalent
+/// way to probe HRTF L/R response without DC-bias artefacts.
+fn impulse_tail_energy(e: &mut Engine, tail_blocks: usize) -> (f32, f32) {
+    let mut input = [[[0.0_f32; BLOCK_SIZE]; 2]; 1];
+    input[0][0][0] = 1.0;
+    input[0][1][0] = 1.0;
+    e.process_block(&input, &[]);
+    input[0][0].fill(0.0);
+    input[0][1].fill(0.0);
+    let (mut l, mut r) = (0.0_f32, 0.0_f32);
+    for _ in 0..tail_blocks {
+        e.process_block(&input, &[]);
+        l += energy(&e.stereo_out[0]);
+        r += energy(&e.stereo_out[1]);
+    }
+    (l, r)
+}
+
 fn build_engine_with_source_at(x: f32, y: f32, z: f32) -> Engine {
     let hrtf = Hrtf::load_from_bytes(HRTF_BYTES).expect("hrtf load");
     let mut e = Engine::new(48000, 1);
@@ -42,24 +61,16 @@ fn stereo_output_is_nonzero_after_decode() {
 }
 
 #[test]
-#[ignore = "uses DC input; bundled HRTF's DC L/R behaviour is opposite of its broadband behaviour. \
-            Replace with a broadband/impulse-input variant before re-enabling."]
 fn left_native_source_lights_left_ear() {
     let mut e = build_engine_with_source_at(0.0, 5.0, 0.0);
-    settle(&mut e, &dc_input(), 8);
-    let l = energy(&e.stereo_out[0]);
-    let r = energy(&e.stereo_out[1]);
+    let (l, r) = impulse_tail_energy(&mut e, 16);
     assert!(l > r, "+Y source should be louder in left ear: L={l}, R={r}");
 }
 
 #[test]
-#[ignore = "uses DC input; bundled HRTF's DC L/R behaviour is opposite of its broadband behaviour. \
-            Replace with a broadband/impulse-input variant before re-enabling."]
 fn right_native_source_lights_right_ear() {
     let mut e = build_engine_with_source_at(0.0, -5.0, 0.0);
-    settle(&mut e, &dc_input(), 8);
-    let l = energy(&e.stereo_out[0]);
-    let r = energy(&e.stereo_out[1]);
+    let (l, r) = impulse_tail_energy(&mut e, 16);
     assert!(r > l, "−Y source should be louder in right ear: L={l}, R={r}");
 }
 
@@ -67,9 +78,7 @@ fn right_native_source_lights_right_ear() {
 fn front_source_is_roughly_symmetric() {
     // Median-plane source: L and R should be within ~3 dB.
     let mut e = build_engine_with_source_at(5.0, 0.0, 0.0);
-    settle(&mut e, &dc_input(), 8);
-    let l = energy(&e.stereo_out[0]);
-    let r = energy(&e.stereo_out[1]);
+    let (l, r) = impulse_tail_energy(&mut e, 16);
     let ratio = (l / r).max(r / l);
     assert!(
         ratio < 2.0,
