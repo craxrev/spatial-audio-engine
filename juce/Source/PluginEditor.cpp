@@ -24,6 +24,54 @@ const juce::Font& font9()  { static juce::Font f = juce::Font(juce::FontOptions(
 const juce::Font& font10() { static juce::Font f = juce::Font(juce::FontOptions(10.0f)); return f; }
 const juce::Font& font11() { static juce::Font f = juce::Font(juce::FontOptions(11.0f)); return f; }
 
+// =============================================================================
+// Theme — "Observatory" palette.
+// Deep ink-blue night sky for the compass, cool indigo grid structure
+// suggesting a precision instrument / celestial dial. Source is a
+// desaturated star-gold (warm but not the Anthropic-brand orange);
+// listener is a calm periwinkle. All colours live here so visual
+// re-themes happen in one place.
+// =============================================================================
+namespace theme
+{
+    // -- Surfaces ------------------------------------------------------
+    constexpr juce::uint32 bg0       = 0xff0a0d12; // deep ink (compass + main bg)
+    constexpr juce::uint32 bg1       = 0xff0f1320; // panel underlay (curve editor / elev strip)
+    constexpr juce::uint32 bg2       = 0xff1a2030; // raised surface (elev strip tracks)
+
+    // -- Grid / structure ----------------------------------------------
+    constexpr juce::uint32 gridFaint  = 0xff1d2638; // inner compass rings, subtle
+    constexpr juce::uint32 gridMid    = 0xff2c364a; // axis lines, plot grid
+    constexpr juce::uint32 gridStrong = 0xff3a4760; // outer compass ring, emphasis lines
+
+    // -- Text ----------------------------------------------------------
+    constexpr juce::uint32 textBright = 0xffdcd6c8; // YOU label, primary readout
+    constexpr juce::uint32 text       = 0xff8b95a8; // cardinal labels, section headers
+    constexpr juce::uint32 textDim    = 0xff666c7a; // hints, secondary readout
+    constexpr juce::uint32 textDimmer = 0xff4a5160; // de-emphasized
+
+    // -- Source (star-gold) --------------------------------------------
+    constexpr juce::uint32 src        = 0xffe6b54a; // primary fill / arrow body
+    constexpr juce::uint32 srcLight   = 0xfff0d18a; // arrowhead highlight, active drag
+    constexpr juce::uint32 srcDeep    = 0xff5e4520; // border / shadow
+    constexpr juce::uint32 srcGlow    = 0x33e6b54a; // soft halo around source dot
+    constexpr juce::uint32 srcWedge   = 0x22e6b54a; // directivity wedge underlay
+    constexpr juce::uint32 srcArrowTr = 0x9be6b54a; // semi-transparent arrow body
+
+    // -- Listener (periwinkle) -----------------------------------------
+    constexpr juce::uint32 lst        = 0xff7a8fc8; // primary fill
+    constexpr juce::uint32 lstLight   = 0xffa4b3da; // YOU label
+    constexpr juce::uint32 lstDeep    = 0xff2a3556; // border
+
+    // -- Effects -------------------------------------------------------
+    constexpr juce::uint32 audibleWarm = 0xffe6b54a; // contour warm tint (alpha-blended)
+    constexpr juce::uint32 audibleCool = 0xff4a5468; // contour cool tint (off-axis)
+    constexpr juce::uint32 occlusion   = 0xffa0a4ba; // gray-violet fog
+    constexpr juce::uint32 curveFill   = 0x33e6b54a; // under-curve area
+    constexpr juce::uint32 curveLine   = 0xffe6b54a; // curve stroke
+    constexpr juce::uint32 nodeActive  = 0xfff5d976; // dragged node
+}
+
 // Native azimuth convention: 0 = front, +90 = left, ±180 = back.
 // Screen y-axis points down, so "front" maps to "up" on screen.
 inline juce::Point<float> azimDistToScreen(juce::Point<float> centre, float radius,
@@ -181,7 +229,7 @@ public:
                     const float endFade = std::sin(t * juce::MathConstants<float>::pi);
                     const float r = 6.0f + 14.0f * occl * endFade;
                     const float a = 0.06f + 0.32f * occl * endFade;
-                    g.setColour(juce::Colour::fromFloatRGBA(0.78f, 0.78f, 0.85f, a));
+                    g.setColour(juce::Colour(theme::occlusion).withAlpha(a));
                     g.fillEllipse(p.x - r, p.y - r, 2.0f * r, 2.0f * r);
                 }
             }
@@ -193,22 +241,22 @@ public:
         // gain × direct × directivity_gain(θ) × 1/r.
         const float yaw     = displayedYaw_;
         const float outerLp = state_.getRawParameterValue("dir_outer_lp")->load();
-        const juce::Colour warm  (0xffff8c42);
-        const juce::Colour slate (0xff5a6478);
+        const juce::Colour warm  (theme::audibleWarm);
+        const juce::Colour slate (theme::audibleCool);
         const auto tint = warm.interpolatedWith(slate, juce::jlimit(0.0f, 1.0f, outerLp));
 
         constexpr float kAudibleThresh = 0.0631f; // −24 dB
         constexpr float kLoudThresh    = 0.5f;    // −6 dB
 
-        g.setColour(tint.withAlpha(0.18f));
+        g.setColour(tint.withAlpha(0.14f));
         g.fillPath(buildAudibilityContour(src, yaw, kAudibleThresh));
-        g.setColour(tint.withAlpha(0.36f));
+        g.setColour(tint.withAlpha(0.30f));
         g.fillPath(buildAudibilityContour(src, yaw, kLoudThresh));
 
         // Heading arrow + tip handle.
         const float arrowLen = 28.0f;
         const auto arrowTip = src + compassDir(yaw) * arrowLen;
-        g.setColour(juce::Colour(0x9bff8c42));
+        g.setColour(juce::Colour(theme::srcArrowTr));
         g.drawLine(src.x, src.y, arrowTip.x, arrowTip.y, 2.0f);
         // Arrowhead.
         {
@@ -220,17 +268,20 @@ public:
                              arrowTip.y - dir.y * 3.0f + perp.y * 5.0f,
                              arrowTip.x - dir.x * 3.0f - perp.x * 5.0f,
                              arrowTip.y - dir.y * 3.0f - perp.y * 5.0f);
-            g.setColour(juce::Colour(0xffff8c42));
+            g.setColour(juce::Colour(theme::src));
             g.fillPath(head);
         }
 
-        // Source dot.
-        g.setColour(juce::Colour(0xffff8c42));
+        // Source dot — soft halo underlay suggests acoustic emission,
+        // then a crisp star-gold fill with a dark border.
+        g.setColour(juce::Colour(theme::srcGlow));
+        g.fillEllipse(src.x - 14.0f, src.y - 14.0f, 28.0f, 28.0f);
+        g.setColour(juce::Colour(theme::src));
         g.fillEllipse(src.x - 8.0f, src.y - 8.0f, 16.0f, 16.0f);
-        g.setColour(juce::Colour(0xff5a2410));
+        g.setColour(juce::Colour(theme::srcDeep));
         g.drawEllipse(src.x - 8.0f, src.y - 8.0f, 16.0f, 16.0f, 1.5f);
 
-        g.setColour(juce::Colour(0xffffb88a));
+        g.setColour(juce::Colour(theme::srcLight));
         g.setFont(font10());
         const bool above = src.y > bounds.getBottom() - 22.0f;
         const float labelY = above ? src.y - 22.0f : src.y + 10.0f;
@@ -239,14 +290,14 @@ public:
                    juce::Justification::centred);
 
         // Top-left readouts.
-        g.setColour(juce::Colour(0xff9a9a9a));
+        g.setColour(juce::Colour(theme::text));
         g.setFont(font11());
         const auto info = juce::String("pos: ") + juce::String(dist, 2) + " m  "
                         + juce::String(az, 1) + kGlyphDeg + " (" + azimuthCardinal(az) + ")   yaw: "
                         + juce::String(yaw, 1) + kGlyphDeg;
         g.drawText(info, juce::Rectangle<int>(8, 8, getWidth() - 16, 14),
                    juce::Justification::topLeft);
-        g.setColour(juce::Colour(0xff666666));
+        g.setColour(juce::Colour(theme::textDim));
         g.setFont(font10());
         // Use ASCII "Cmd" — the U+2318 ⌘ glyph is missing in many fonts.
         const auto hint = juce::String("drag dot to move ") + kGlyphMid + " arrow to aim  "
@@ -321,10 +372,10 @@ private:
         }
 
         // Conditional repaint: skip when nothing has changed since last
-        // frame. Tracks the 8 contour-shape inputs + 2 smoothed values
-        // + drag state. JUCE's setBufferedToImage cache then reuses the
-        // last rendered buffer for free.
-        const float snap[8] = {
+        // frame. Tracks contour-shape inputs (source pos, directivity,
+        // gain, distance curve) + smoothed values + drag state. JUCE's
+        // setBufferedToImage cache then reuses the last buffer for free.
+        const float snap[15] = {
             currentDistance(),
             currentAzimuth(),
             state_.getRawParameterValue("dir_inner_deg") ->load(),
@@ -333,11 +384,18 @@ private:
             state_.getRawParameterValue("dir_outer_lp")  ->load(),
             state_.getRawParameterValue("gain_db")       ->load(),
             state_.getRawParameterValue("direct_path_gain")->load(),
+            state_.getRawParameterValue("dist_a")        ->load(),
+            state_.getRawParameterValue("dist_a_db")     ->load(),
+            state_.getRawParameterValue("dist_b")        ->load(),
+            state_.getRawParameterValue("dist_b_db")     ->load(),
+            state_.getRawParameterValue("dist_c")        ->load(),
+            state_.getRawParameterValue("dist_c_db")     ->load(),
+            state_.getRawParameterValue("dist_d")        ->load(),
         };
         bool changed = activeDrag_ != DragTarget::None
                     || std::abs(displayedYaw_  - prevDispYaw)  > 0.02f
                     || std::abs(displayedOcclusion_ - prevDispOccl) > 0.001f;
-        for (int i = 0; i < 8; ++i)
+        for (int i = 0; i < 15; ++i)
             if (snap[i] != prevSnap_[i]) { prevSnap_[i] = snap[i]; changed = true; }
         if (changed) repaint();
     }
@@ -543,24 +601,68 @@ private:
                                 juce::Point<float> centre,
                                 float outerR) const
     {
-        g.fillAll(juce::Colour(0xff141414));
+        // Subtle radial gradient — deeper at edges, slightly lifted at
+        // centre — adds atmospheric depth without pulling focus.
+        const auto bg0 = juce::Colour(theme::bg0);
+        const auto bg0Edge = bg0.withMultipliedBrightness(0.78f);
+        juce::ColourGradient grad(bg0, centre.x, centre.y,
+                                  bg0Edge, centre.x + outerR, centre.y, true);
+        g.setGradientFill(grad);
+        g.fillRect(getLocalBounds());
 
-        g.setColour(juce::Colour(0xff2a2a2a));
+        // Distance rings every 5 m (kCompassMaxMeters = 25 m → 5 rings).
+        g.setColour(juce::Colour(theme::gridFaint));
         for (float d = 5.0f; d <= kCompassMaxMeters; d += 5.0f)
         {
             const float ringR = outerR * (d / kCompassMaxMeters);
             g.drawEllipse(centre.x - ringR, centre.y - ringR,
                           2.0f * ringR, 2.0f * ringR, 1.0f);
         }
-        g.setColour(juce::Colour(0xff444444));
+        // Outer ring — slightly stronger emphasis.
+        g.setColour(juce::Colour(theme::gridStrong));
         g.drawEllipse(centre.x - outerR, centre.y - outerR,
                       2.0f * outerR, 2.0f * outerR, 1.5f);
 
-        g.setColour(juce::Colour(0xff262626));
-        g.drawLine(centre.x, centre.y - outerR, centre.x, centre.y + outerR);
-        g.drawLine(centre.x - outerR, centre.y, centre.x + outerR, centre.y);
+        // Minor tick marks every 15° — gives the compass a navigation-
+        // instrument / sextant feel. Slightly longer at the cardinals.
+        g.setColour(juce::Colour(theme::gridMid));
+        for (int a = 0; a < 360; a += 15)
+        {
+            const bool cardinal = (a % 90 == 0);
+            const float tickLen = cardinal ? 8.0f : 4.0f;
+            const float ang = juce::degreesToRadians((float)a);
+            const float ux = -std::sin(ang), uy = -std::cos(ang);
+            const float x0 = centre.x + ux * outerR;
+            const float y0 = centre.y + uy * outerR;
+            const float x1 = centre.x + ux * (outerR - tickLen);
+            const float y1 = centre.y + uy * (outerR - tickLen);
+            g.drawLine(x0, y0, x1, y1, cardinal ? 1.2f : 0.8f);
+        }
 
-        g.setColour(juce::Colour(0xff7a7a7a));
+        // Cardinal axis lines — subtle, just enough to read centre.
+        g.setColour(juce::Colour(theme::gridFaint));
+        g.drawLine(centre.x, centre.y - outerR, centre.x, centre.y + outerR, 0.6f);
+        g.drawLine(centre.x - outerR, centre.y, centre.x + outerR, centre.y, 0.6f);
+
+        // Distance ring numbers (5, 10, 15, 20, 25 m). Placed along the
+        // forward-right diagonal where they overlap the least with the
+        // listener head and source-position label space.
+        g.setColour(juce::Colour(theme::textDimmer));
+        g.setFont(font9());
+        for (int d = 5; d <= (int)kCompassMaxMeters; d += 5)
+        {
+            const float ringR = outerR * ((float)d / kCompassMaxMeters);
+            // 45° forward-right — front-right quadrant.
+            const float ang = juce::degreesToRadians(-45.0f);
+            const float lx = centre.x - std::sin(ang) * ringR;
+            const float ly = centre.y - std::cos(ang) * ringR;
+            g.drawText(juce::String(d) + "m",
+                       juce::Rectangle<float>(lx - 14.0f, ly - 6.0f, 28.0f, 12.0f),
+                       juce::Justification::centred);
+        }
+
+        // Cardinal labels. Letter-spaced caps for the instrument feel.
+        g.setColour(juce::Colour(theme::text));
         g.setFont(font11());
         g.drawText("FRONT", juce::Rectangle<float>(centre.x - 40, centre.y - outerR - 16, 80, 12),
                    juce::Justification::centred);
@@ -571,17 +673,18 @@ private:
         g.drawText("RIGHT", juce::Rectangle<float>(centre.x + outerR - 46, centre.y - 6, 40, 12),
                    juce::Justification::centredRight);
 
-        g.setColour(juce::Colour(0xff5a82ff));
+        // Listener head — periwinkle disc with darker rim + nose triangle.
+        g.setColour(juce::Colour(theme::lst));
         g.fillEllipse(centre.x - 13.0f, centre.y - 13.0f, 26.0f, 26.0f);
         juce::Path nose;
         nose.addTriangle(centre.x - 6.0f, centre.y - 9.0f,
                          centre.x + 6.0f, centre.y - 9.0f,
                          centre.x,        centre.y - 18.0f);
         g.fillPath(nose);
-        g.setColour(juce::Colour(0xff1a2a55));
+        g.setColour(juce::Colour(theme::lstDeep));
         g.drawEllipse(centre.x - 13.0f, centre.y - 13.0f, 26.0f, 26.0f, 1.5f);
         g.strokePath(nose, juce::PathStrokeType(1.5f));
-        g.setColour(juce::Colour(0xff8aa8ff));
+        g.setColour(juce::Colour(theme::lstLight));
         g.setFont(font10());
         g.drawText("YOU",
                    juce::Rectangle<float>(centre.x - 30.0f, centre.y + 18.0f, 60.0f, 12.0f),
@@ -594,14 +697,16 @@ private:
     float displayedOcclusion_ = 0.0f;
     bool  firstTick_          = true;
     juce::Image backgroundImage_;
-    float prevSnap_[8] = { std::numeric_limits<float>::quiet_NaN(),
-                            std::numeric_limits<float>::quiet_NaN(),
-                            std::numeric_limits<float>::quiet_NaN(),
-                            std::numeric_limits<float>::quiet_NaN(),
-                            std::numeric_limits<float>::quiet_NaN(),
-                            std::numeric_limits<float>::quiet_NaN(),
-                            std::numeric_limits<float>::quiet_NaN(),
-                            std::numeric_limits<float>::quiet_NaN() };
+    float prevSnap_[15] = {
+        std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN(),
+        std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN(),
+        std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN(),
+        std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN(),
+        std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN(),
+        std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN(),
+        std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN(),
+        std::numeric_limits<float>::quiet_NaN(),
+    };
 };
 
 // ---------------------------------------------------------------------------
@@ -624,7 +729,7 @@ public:
 
     void paint(juce::Graphics& g) override
     {
-        g.fillAll(juce::Colour(0xff141414));
+        g.fillAll(juce::Colour(theme::bg0));
 
         const auto b = getLocalBounds().toFloat();
         const float colW = b.getWidth() * 0.5f;
@@ -702,14 +807,14 @@ private:
         columnTopBot(col, topY, botY);
         const float trackH = botY - topY;
 
-        g.setColour(juce::Colour(0xff2c2c2c));
+        g.setColour(juce::Colour(theme::bg2));
         g.fillRoundedRectangle(cx - 2.0f, topY, 4.0f, trackH, 2.0f);
 
         const float midY = topY + trackH * 0.5f;
-        g.setColour(juce::Colour(0xff4a4a4a));
+        g.setColour(juce::Colour(theme::gridStrong));
         g.drawLine(cx - 10.0f, midY, cx + 10.0f, midY, 1.0f);
 
-        g.setColour(juce::Colour(0xff7a7a7a));
+        g.setColour(juce::Colour(theme::text));
         g.setFont(font10());
         g.drawText("UP",
                    juce::Rectangle<float>(col.getX(), col.getY() + 4.0f, col.getWidth(), 12.0f),
@@ -722,12 +827,12 @@ private:
         const float t   = juce::jlimit(0.0f, 1.0f, (90.0f - el) / 180.0f);
         const float h_y = topY + t * trackH;
 
-        g.setColour(juce::Colour(0xffff8c42));
+        g.setColour(juce::Colour(theme::src));
         g.fillEllipse(cx - 9.0f, h_y - 9.0f, 18.0f, 18.0f);
-        g.setColour(juce::Colour(0xff5a2410));
+        g.setColour(juce::Colour(theme::srcDeep));
         g.drawEllipse(cx - 9.0f, h_y - 9.0f, 18.0f, 18.0f, 1.5f);
 
-        g.setColour(juce::Colour(0xff9a9a9a));
+        g.setColour(juce::Colour(theme::textBright));
         g.setFont(font10());
         g.drawText(juce::String((int) std::round(el)) + kGlyphDeg,
                    juce::Rectangle<float>(col.getX(), botY + 16.0f, col.getWidth(), 12.0f),
@@ -742,13 +847,13 @@ private:
         const float trackH = botY - topY;
         const float midY   = topY + trackH * 0.5f;
 
-        g.setColour(juce::Colour(0xff222222));
+        g.setColour(juce::Colour(theme::bg2));
         g.fillRoundedRectangle(juce::Rectangle<float>(col.getX() + 6, topY, col.getWidth() - 12, trackH), 4.0f);
 
-        g.setColour(juce::Colour(0xff4a4a4a));
+        g.setColour(juce::Colour(theme::gridStrong));
         g.drawLine(cx - 14.0f, midY, cx + 14.0f, midY, 1.0f);
 
-        g.setColour(juce::Colour(0xff7a7a7a));
+        g.setColour(juce::Colour(theme::text));
         g.setFont(font10());
         g.drawText("TILT",
                    juce::Rectangle<float>(col.getX(), col.getY() + 4.0f, col.getWidth(), 12.0f),
@@ -762,9 +867,9 @@ private:
         const float t   = juce::jlimit(0.0f, 1.0f, (90.0f - pitch) / 180.0f);
         const float h_y = topY + t * trackH;
 
-        g.setColour(juce::Colour(0xffff8c42));
+        g.setColour(juce::Colour(theme::src));
         g.fillEllipse(cx - 9.0f, h_y - 9.0f, 18.0f, 18.0f);
-        g.setColour(juce::Colour(0xff5a2410));
+        g.setColour(juce::Colour(theme::srcDeep));
         g.drawEllipse(cx - 9.0f, h_y - 9.0f, 18.0f, 18.0f, 1.5f);
 
         // Tilt indicator: a short line through the handle, tilted by pitch.
@@ -772,7 +877,7 @@ private:
         const float ang     = juce::degreesToRadians(pitch);
         const float lineLen = 11.0f;
         const float dxL = std::cos(ang), dyL = -std::sin(ang);
-        g.setColour(juce::Colour(0xff5a2410));
+        g.setColour(juce::Colour(theme::srcDeep));
         g.drawLine(cx - dxL * lineLen, h_y - dyL * lineLen,
                    cx + dxL * lineLen, h_y + dyL * lineLen, 2.0f);
         // Arrowhead at the +ang end.
@@ -787,7 +892,7 @@ private:
             g.fillPath(head);
         }
 
-        g.setColour(juce::Colour(0xff9a9a9a));
+        g.setColour(juce::Colour(theme::textBright));
         g.setFont(font10());
         g.drawText(juce::String((int) std::round(pitch)) + kGlyphDeg,
                    juce::Rectangle<float>(col.getX(), botY + 16.0f, col.getWidth(), 12.0f),
@@ -841,11 +946,11 @@ public:
 
     void paint(juce::Graphics& g) override
     {
-        g.fillAll(juce::Colour(0xff141414));
+        g.fillAll(juce::Colour(theme::bg1));
         const auto plot = plotArea();
 
         // Grid lines.
-        g.setColour(juce::Colour(0xff232323));
+        g.setColour(juce::Colour(theme::gridFaint));
         for (int d = 0; d <= (int) DIST_MAX; d += 10)
         {
             const float x = graphX((float) d);
@@ -857,12 +962,12 @@ public:
             g.drawLine(plot.getX(), y, plot.getRight(), y, 1.0f);
         }
         // 0-dB reference line emphasised.
-        g.setColour(juce::Colour(0xff353535));
+        g.setColour(juce::Colour(theme::gridMid));
         const float y0 = graphY(0.0f);
         g.drawLine(plot.getX(), y0, plot.getRight(), y0, 1.0f);
 
         // Axis labels.
-        g.setColour(juce::Colour(0xff7a7a7a));
+        g.setColour(juce::Colour(theme::textDim));
         g.setFont(font9());
         for (int d : {1, 10, 50, 100, 150})
         {
@@ -896,7 +1001,7 @@ public:
         fill.lineTo(d.x, d.y);
         fill.lineTo(d.x, y0);
         fill.closeSubPath();
-        g.setColour(juce::Colour(0x33ff8c42));
+        g.setColour(juce::Colour(theme::curveFill));
         g.fillPath(fill);
 
         // The curve itself.
@@ -906,7 +1011,7 @@ public:
         line.lineTo(b.x, b.y);
         line.lineTo(c.x, c.y);
         line.lineTo(d.x, d.y);
-        g.setColour(juce::Colour(0xffff8c42));
+        g.setColour(juce::Colour(theme::curveLine));
         g.strokePath(line, juce::PathStrokeType(1.5f));
 
         // Draggable nodes.
@@ -1003,11 +1108,11 @@ private:
     {
         const bool active = activeNode_ == n;
         const float r = active ? 7.0f : 5.0f;
-        g.setColour(juce::Colour(0xffff8c42));
+        g.setColour(juce::Colour(active ? theme::nodeActive : theme::src));
         g.fillEllipse(p.x - r, p.y - r, 2 * r, 2 * r);
-        g.setColour(juce::Colour(0xff5a2410));
+        g.setColour(juce::Colour(theme::srcDeep));
         g.drawEllipse(p.x - r, p.y - r, 2 * r, 2 * r, 1.5f);
-        g.setColour(juce::Colour(0xffe8c5a8));
+        g.setColour(juce::Colour(theme::srcLight));
         g.setFont(font10());
         g.drawText(label,
                    juce::Rectangle<float>(p.x + r + 1, p.y - 6, 14, 12),
@@ -1099,8 +1204,8 @@ namespace {
 
 void styleHeaderLabel(juce::Label& l)
 {
-    l.setColour(juce::Label::textColourId, juce::Colour(0xff8a8a8a));
-    l.setFont(juce::Font(juce::FontOptions(10.0f)).withExtraKerningFactor(0.18f));
+    l.setColour(juce::Label::textColourId, juce::Colour(theme::text));
+    l.setFont(juce::Font(juce::FontOptions(10.0f)).withExtraKerningFactor(0.22f));
     l.setJustificationType(juce::Justification::centredLeft);
 }
 
@@ -1129,12 +1234,18 @@ SpatialAudioEditor::SpatialAudioEditor(SpatialAudioProcessor& p)
     {
         s.setSliderStyle(juce::Slider::LinearHorizontal);
         s.setTextBoxStyle(juce::Slider::TextBoxRight, false, 60, 18);
+        s.setColour(juce::Slider::backgroundColourId,       juce::Colour(theme::bg2));
+        s.setColour(juce::Slider::trackColourId,            juce::Colour(theme::src));
+        s.setColour(juce::Slider::thumbColourId,            juce::Colour(theme::srcLight));
+        s.setColour(juce::Slider::textBoxBackgroundColourId, juce::Colour(0));
+        s.setColour(juce::Slider::textBoxOutlineColourId,   juce::Colour(0));
+        s.setColour(juce::Slider::textBoxTextColourId,      juce::Colour(theme::textBright));
         addAndMakeVisible(s);
     };
     auto initLabel = [this](juce::Label& l, const char* text)
     {
         l.setText(text, juce::dontSendNotification);
-        l.setColour(juce::Label::textColourId, juce::Colour(0xffbbbbbb));
+        l.setColour(juce::Label::textColourId, juce::Colour(theme::textBright));
         l.setJustificationType(juce::Justification::centredRight);
         l.setFont(juce::Font(juce::FontOptions(11.0f)));
         addAndMakeVisible(l);
@@ -1147,7 +1258,9 @@ SpatialAudioEditor::SpatialAudioEditor(SpatialAudioProcessor& p)
     gainAttachment_ = std::make_unique<SliderAttachment>(p.apvts, "gain_db", gainSlider_);
 
     aimAtListenerButton_.setTooltip("Lock source orientation to face the listener.");
-    aimAtListenerButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(0xffbbbbbb));
+    aimAtListenerButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(theme::textBright));
+    aimAtListenerButton_.setColour(juce::ToggleButton::tickColourId, juce::Colour(theme::src));
+    aimAtListenerButton_.setColour(juce::ToggleButton::tickDisabledColourId, juce::Colour(theme::gridStrong));
     addAndMakeVisible(aimAtListenerButton_);
     aimAttachment_ = std::make_unique<ButtonAttachment>(
         p.apvts, "aim_at_listener", aimAtListenerButton_);
@@ -1192,6 +1305,11 @@ SpatialAudioEditor::SpatialAudioEditor(SpatialAudioProcessor& p)
     int presetId = 1;
     for (const auto& pr : kPresets)
         distPresetBox_.addItem(pr.name, presetId++);
+    distPresetBox_.setColour(juce::ComboBox::backgroundColourId, juce::Colour(theme::bg2));
+    distPresetBox_.setColour(juce::ComboBox::textColourId,       juce::Colour(theme::textBright));
+    distPresetBox_.setColour(juce::ComboBox::outlineColourId,    juce::Colour(theme::gridStrong));
+    distPresetBox_.setColour(juce::ComboBox::buttonColourId,     juce::Colour(theme::bg2));
+    distPresetBox_.setColour(juce::ComboBox::arrowColourId,      juce::Colour(theme::text));
     addAndMakeVisible(distPresetBox_);
     distPresetBox_.onChange = [this] {
         const int sel = distPresetBox_.getSelectedId() - 1;
@@ -1232,7 +1350,9 @@ SpatialAudioEditor::SpatialAudioEditor(SpatialAudioProcessor& p)
     extAmountSlider_.setTooltip("Externalizer amount (0..100). 0 = off; higher = stronger out-of-head effect.");
     extAmountAttachment_ = std::make_unique<SliderAttachment>(p.apvts, "externalizer_amount", extAmountSlider_);
 
-    stereoBypassButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(0xffbbbbbb));
+    stereoBypassButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(theme::textBright));
+    stereoBypassButton_.setColour(juce::ToggleButton::tickColourId, juce::Colour(theme::src));
+    stereoBypassButton_.setColour(juce::ToggleButton::tickDisabledColourId, juce::Colour(theme::gridStrong));
     stereoBypassButton_.setTooltip("Skip all spatial DSP - pass host stereo straight to output. Only Gain still applies.");
     addAndMakeVisible(stereoBypassButton_);
     stereoBypassAttachment_ =
@@ -1261,6 +1381,10 @@ SpatialAudioEditor::SpatialAudioEditor(SpatialAudioProcessor& p)
 
     advancedButton_.setTooltip("Show / hide additional source parameters (Direct, Ext. Character).");
     advancedButton_.setButtonText("Advanced " + kGlyphDown);
+    advancedButton_.setColour(juce::TextButton::buttonColourId,   juce::Colour(theme::bg2));
+    advancedButton_.setColour(juce::TextButton::buttonOnColourId, juce::Colour(theme::gridStrong));
+    advancedButton_.setColour(juce::TextButton::textColourOffId,  juce::Colour(theme::textBright));
+    advancedButton_.setColour(juce::TextButton::textColourOnId,   juce::Colour(theme::textBright));
     advancedButton_.onClick = [this, setAdvVisible] {
         advancedOpen_ = !advancedOpen_;
         advancedButton_.setButtonText("Advanced " + (advancedOpen_ ? kGlyphUp : kGlyphDown));
@@ -1270,6 +1394,10 @@ SpatialAudioEditor::SpatialAudioEditor(SpatialAudioProcessor& p)
     addAndMakeVisible(advancedButton_);
 
     resetButton_.setTooltip("Reset all parameters to defaults.");
+    resetButton_.setColour(juce::TextButton::buttonColourId,   juce::Colour(theme::bg2));
+    resetButton_.setColour(juce::TextButton::buttonOnColourId, juce::Colour(theme::gridStrong));
+    resetButton_.setColour(juce::TextButton::textColourOffId,  juce::Colour(theme::textBright));
+    resetButton_.setColour(juce::TextButton::textColourOnId,   juce::Colour(theme::textBright));
     resetButton_.onClick = [this] { resetAllParams(); };
     addAndMakeVisible(resetButton_);
 
@@ -1309,7 +1437,7 @@ void SpatialAudioEditor::resetAllParams()
 
 void SpatialAudioEditor::paint(juce::Graphics& g)
 {
-    g.fillAll(juce::Colour(0xff0c0c0c));
+    g.fillAll(juce::Colour(theme::bg0));
 }
 
 void SpatialAudioEditor::layoutSliderRow(juce::Rectangle<int>& area, int rowH,
