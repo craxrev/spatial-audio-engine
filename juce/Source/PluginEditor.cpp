@@ -281,10 +281,14 @@ public:
         // darkens only the background corners, not the text/source.
         paintVignette(g, getLocalBounds());
 
-        // Source.
-        const float dist = currentDistance();
-        const float az   = currentAzimuth();
-        const auto  src  = azimDistToScreen(centre, outerR, az, dist, kCompassMaxMeters);
+        // Linked stereo pair. `src` is the midpoint at (azimuth, distance);
+        // L and R fan out by ±width/2 around it on the same distance ring.
+        const float dist  = currentDistance();
+        const float az    = currentAzimuth();
+        const float wHalf = currentWidth() * 0.5f;
+        const auto  src   = azimDistToScreen(centre, outerR, az,         dist, kCompassMaxMeters);
+        const auto  srcL  = azimDistToScreen(centre, outerR, az + wHalf, dist, kCompassMaxMeters);
+        const auto  srcR  = azimDistToScreen(centre, outerR, az - wHalf, dist, kCompassMaxMeters);
 
         // Occlusion fog along listener-source line.
         const float occl = displayedOcclusion_;
@@ -348,19 +352,56 @@ public:
             g.fillPath(head);
         }
 
-        // Source — phosphor blip with glow halo. Outer ring suggests
-        // a contact / target lock; the inner dot is the peak intensity.
-        drawPhosphorDot(g, src, 6.0f, theme::src, theme::glow);
+        // Connecting arc along the constant-distance ring between L and R.
+        // Drawn on the same circle the dots ride; visually anchors them
+        // as one linked pair rather than two independent sources.
+        {
+            const float ringR = metersToPixels(dist);
+            if (ringR > 1.0f && currentWidth() > 0.01f)
+            {
+                // azimDistToScreen wraps the compass: 0° = up (−Y screen),
+                // +90° (left azimuth) = −X screen. Build a path that
+                // sweeps from azimR to azimL through the centre azimuth.
+                const float aL = juce::degreesToRadians(az + wHalf);
+                const float aR = juce::degreesToRadians(az - wHalf);
+                // Screen-space angle convention used by compassDir:
+                // pt = centre + (sin(a), -cos(a)) · r
+                juce::Path arc;
+                const int steps = juce::jmax(8, (int) (currentWidth() * 0.5f));
+                for (int i = 0; i <= steps; ++i)
+                {
+                    const float t = (float) i / (float) steps;
+                    const float a = aR + (aL - aR) * t;
+                    const juce::Point<float> p {
+                        centre.x + std::sin(a) * ringR,
+                        centre.y - std::cos(a) * ringR
+                    };
+                    if (i == 0) arc.startNewSubPath(p); else arc.lineTo(p);
+                }
+                g.setColour(juce::Colour(theme::src).withAlpha(0.45f));
+                g.strokePath(arc, juce::PathStrokeType(1.2f));
+            }
+        }
+
+        // L and R virtual-speaker blips with glow halos. Same phosphor
+        // styling as the original single-source dot.
+        drawPhosphorDot(g, srcL, 6.0f, theme::src, theme::glow);
+        drawPhosphorDot(g, srcR, 6.0f, theme::src, theme::glow);
         g.setColour(juce::Colour(theme::phosphor4));
-        g.drawEllipse(src.x - 10.0f, src.y - 10.0f, 20.0f, 20.0f, 1.2f);
+        g.drawEllipse(srcL.x - 10.0f, srcL.y - 10.0f, 20.0f, 20.0f, 1.2f);
+        g.drawEllipse(srcR.x - 10.0f, srcR.y - 10.0f, 20.0f, 20.0f, 1.2f);
 
         g.setColour(juce::Colour(theme::srcLight));
         g.setFont(font10());
-        const bool above = src.y > bounds.getBottom() - 22.0f;
-        const float labelY = above ? src.y - 22.0f : src.y + 12.0f;
-        g.drawText("SRC",
-                   juce::Rectangle<float>(src.x - 30.0f, labelY, 60.0f, 12.0f),
-                   juce::Justification::centred);
+        auto labelFor = [&](const juce::Point<float>& p, const char* tag) {
+            const bool above = p.y > bounds.getBottom() - 22.0f;
+            const float ly   = above ? p.y - 22.0f : p.y + 12.0f;
+            g.drawText(tag,
+                       juce::Rectangle<float>(p.x - 30.0f, ly, 60.0f, 12.0f),
+                       juce::Justification::centred);
+        };
+        labelFor(srcL, "L");
+        labelFor(srcR, "R");
 
         // Top-left readouts — monospace technical readout.
         g.setColour(juce::Colour(theme::phosphor3));
@@ -452,9 +493,10 @@ private:
         // frame. Tracks contour-shape inputs (source pos, directivity,
         // gain, distance curve) + smoothed values + drag state. JUCE's
         // setBufferedToImage cache then reuses the last buffer for free.
-        const float snap[15] = {
+        const float snap[16] = {
             currentDistance(),
             currentAzimuth(),
+            currentWidth(),
             state_.getRawParameterValue("dir_inner_deg") ->load(),
             state_.getRawParameterValue("dir_outer_deg") ->load(),
             state_.getRawParameterValue("dir_outer_gain")->load(),
@@ -472,7 +514,7 @@ private:
         bool changed = activeDrag_ != DragTarget::None
                     || std::abs(displayedYaw_  - prevDispYaw)  > 0.02f
                     || std::abs(displayedOcclusion_ - prevDispOccl) > 0.001f;
-        for (int i = 0; i < 15; ++i)
+        for (int i = 0; i < 16; ++i)
             if (snap[i] != prevSnap_[i]) { prevSnap_[i] = snap[i]; changed = true; }
         if (changed) repaint();
     }
@@ -496,6 +538,7 @@ private:
 
     float currentDistance() const { return state_.getRawParameterValue("distance")->load(); }
     float currentAzimuth()  const { return state_.getRawParameterValue("azimuth")->load(); }
+    float currentWidth()    const { return state_.getRawParameterValue("width")->load(); }
 
     float metersToPixels(float meters) const
     {
@@ -772,7 +815,7 @@ private:
     float displayedOcclusion_ = 0.0f;
     bool  firstTick_          = true;
     juce::Image backgroundImage_;
-    float prevSnap_[15] = {
+    float prevSnap_[16] = {
         std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN(),
         std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN(),
         std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN(),
@@ -780,7 +823,7 @@ private:
         std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN(),
         std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN(),
         std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN(),
-        std::numeric_limits<float>::quiet_NaN(),
+        std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN(),
     };
 };
 
@@ -1359,6 +1402,15 @@ SpatialAudioEditor::SpatialAudioEditor(SpatialAudioProcessor& p)
     gainSlider_.setTooltip("Source gain (dB).");
     gainAttachment_ = std::make_unique<SliderAttachment>(p.apvts, "gain_db", gainSlider_);
 
+    // Width: angular spread between L and R virtual sources.
+    initLabel(widthLabel_, "Width");
+    initSlider(widthSlider_);
+    widthSlider_.setTooltip(
+        "Angular spread between L and R virtual sources (degrees). "
+        "0" + kGlyphDeg + " = mono. 60" + kGlyphDeg
+        + " = standard stereo. 180" + kGlyphDeg + " = hard L/R.");
+    widthAttachment_ = std::make_unique<SliderAttachment>(p.apvts, "width", widthSlider_);
+
     aimAtListenerButton_.setTooltip("Lock source orientation to face the listener.");
     aimAtListenerButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(theme::textBright));
     aimAtListenerButton_.setColour(juce::ToggleButton::tickColourId, juce::Colour(theme::src));
@@ -1543,7 +1595,7 @@ void SpatialAudioEditor::parameterChanged(const juce::String&, float)
 void SpatialAudioEditor::resetAllParams()
 {
     constexpr const char* ids[] = {
-        "distance", "azimuth", "elevation", "gain_db",
+        "distance", "azimuth", "elevation", "width", "gain_db",
         "listener_x", "listener_y", "listener_z",
         "yaw", "pitch", "roll",
         "source_yaw", "source_pitch",
@@ -1627,6 +1679,13 @@ void SpatialAudioEditor::resized()
         aimAtListenerButton_.setBounds(r.removeFromRight(124));
         r.removeFromRight(4);
         gainSlider_.setBounds(r);
+    }
+    // ---- Width (stereo pair angular spread) ----
+    {
+        auto r = area.removeFromTop(22);
+        area.removeFromTop(2);
+        widthLabel_.setBounds(r.removeFromLeft(60));
+        widthSlider_.setBounds(r);
     }
 
     // ---- SHAPE ----

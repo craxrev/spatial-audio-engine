@@ -92,6 +92,12 @@ SpatialAudioProcessor::makeParameterLayout()
     layout.add(std::make_unique<P>(juce::ParameterID{"elevation",  1}, "Elevation",
                                     R{-90.0f, 90.0f, 0.1f},   0.0f,
                                     Attrs().withStringFromValueFunction(fmtElev)));
+    // Angular spread between the linked L and R virtual sources.
+    // 0° = collapsed to centre (mono-ish); 60° = ITU stereo;
+    // 180° = hard left/right ear positions.
+    layout.add(std::make_unique<P>(juce::ParameterID{"width",      1}, "Width",
+                                    R{0.0f, 180.0f, 0.1f},   60.0f,
+                                    Attrs().withStringFromValueFunction(fmtDeg)));
     layout.add(std::make_unique<P>(juce::ParameterID{"gain_db",    1}, "Gain",
                                     R{-80.0f, 12.0f, 0.1f},   0.0f,
                                     Attrs().withStringFromValueFunction(fmtDb)));
@@ -212,6 +218,7 @@ SpatialAudioProcessor::SpatialAudioProcessor()
     pDist_      = apvts.getRawParameterValue("distance");
     pAzim_      = apvts.getRawParameterValue("azimuth");
     pElev_      = apvts.getRawParameterValue("elevation");
+    pWidth_     = apvts.getRawParameterValue("width");
     pGainDb_    = apvts.getRawParameterValue("gain_db");
     pListenerX_ = apvts.getRawParameterValue("listener_x");
     pListenerY_ = apvts.getRawParameterValue("listener_y");
@@ -260,7 +267,10 @@ void SpatialAudioProcessor::prepareToPlay(double sampleRate, int /*samplesPerBlo
         engine_destroy(engine_);
         engine_ = nullptr;
     }
-    engine_ = engine_new(static_cast<uint32_t>(sampleRate), 1);
+    // Two sources: a linked stereo pair. Source 0 = L virtual speaker,
+    // source 1 = R virtual speaker. Their positions are computed each
+    // block from (azimuth, elevation, distance, width).
+    engine_ = engine_new(static_cast<uint32_t>(sampleRate), 2);
     if (engine_ == nullptr) return;
 
     hrtfLoaded_ = engine_load_main_hrtf(
@@ -278,6 +288,7 @@ void SpatialAudioProcessor::prepareToPlay(double sampleRate, int /*samplesPerBlo
         static_cast<size_t>(SpatialAudioBinary::hrtf_post_filter_b_binSize));
 
     engine_set_source_active(engine_, 0, true);
+    engine_set_source_active(engine_, 1, true);
 
     // Reset rings; prime output with one engine-block of zeros to
     // cover the chunker's 128-sample latency.
@@ -309,12 +320,26 @@ void SpatialAudioProcessor::applyParametersToEngine()
 {
     if (engine_ == nullptr) return;
 
-    float sx, sy, sz;
-    sphericalToNative(pDist_->load(), pAzim_->load(), pElev_->load(), sx, sy, sz);
-    engine_set_source_position(engine_, 0, sx, sy, sz);
+    // Linked stereo pair: both sources share elevation + distance and
+    // mirror the centre azimuth by ±width/2. In native convention
+    // +Y is left, so positive azimuth = left → source 0 (L) takes
+    // (azim + width/2) and source 1 (R) takes (azim − width/2).
+    const float azim   = pAzim_->load();
+    const float elev   = pElev_->load();
+    const float dist   = pDist_->load();
+    const float half_w = pWidth_->load() * 0.5f;
+    const float azimL  = azim + half_w;
+    const float azimR  = azim - half_w;
+
+    float lx, ly, lz, rx, ry, rz;
+    sphericalToNative(dist, azimL, elev, lx, ly, lz);
+    sphericalToNative(dist, azimR, elev, rx, ry, rz);
+    engine_set_source_position(engine_, 0, lx, ly, lz);
+    engine_set_source_position(engine_, 1, rx, ry, rz);
 
     const float gainLin = std::pow(10.0f, pGainDb_->load() * 0.05f);
     engine_set_source_gain(engine_, 0, gainLin);
+    engine_set_source_gain(engine_, 1, gainLin);
 
     engine_set_listener_position(engine_,
         pListenerX_->load(), pListenerY_->load(), pListenerZ_->load());
@@ -323,55 +348,92 @@ void SpatialAudioProcessor::applyParametersToEngine()
     eulerToQuat(pYaw_->load(), pPitch_->load(), pRoll_->load(), qw, qx, qy, qz);
     engine_set_listener_rotation(engine_, qw, qx, qy, qz);
 
-    float sqw, sqx, sqy, sqz;
-    eulerToQuat(pSrcYaw_->load(), pSrcPitch_->load(), 0.0f,
-                sqw, sqx, sqy, sqz);
-    engine_set_source_rotation(engine_, 0, sqw, sqx, sqy, sqz);
+    // Each virtual speaker faces the listener when "Aim at listener"
+    // is on — that means yaw = azim + 180°, computed per source.
+    // When off, both share the user-set source_yaw value.
+    const bool  aim      = apvts.getRawParameterValue("aim_at_listener")->load() > 0.5f;
+    const float srcPitch = pSrcPitch_->load();
+    auto applyRot = [&](uint32_t idx, float yawDeg) {
+        float sqw, sqx, sqy, sqz;
+        eulerToQuat(yawDeg, srcPitch, 0.0f, sqw, sqx, sqy, sqz);
+        engine_set_source_rotation(engine_, idx, sqw, sqx, sqy, sqz);
+    };
+    auto wrap = [](float a) {
+        while (a >  180.0f) a -= 360.0f;
+        while (a < -180.0f) a += 360.0f;
+        return a;
+    };
+    if (aim)
+    {
+        applyRot(0, wrap(azimL + 180.0f));
+        applyRot(1, wrap(azimR + 180.0f));
+    }
+    else
+    {
+        const float y = pSrcYaw_->load();
+        applyRot(0, y);
+        applyRot(1, y);
+    }
 
-    engine_set_source_direct_path_gain(engine_, 0, pDpGain_->load());
-    engine_set_source_occlusion(engine_, 0, pOcclusion_->load());
-    engine_set_source_directivity(
-        engine_, 0,
-        juce::degreesToRadians(pDirInner_->load()),
-        juce::degreesToRadians(pDirOuter_->load()),
-        pDirGain_->load(),
-        pDirLp_->load());
+    const float dp  = pDpGain_->load();
+    const float occ = pOcclusion_->load();
+    const float dInner = juce::degreesToRadians(pDirInner_->load());
+    const float dOuter = juce::degreesToRadians(pDirOuter_->load());
+    const float dGain  = pDirGain_->load();
+    const float dLp    = pDirLp_->load();
+    const float revSend = pRevSend_->load();
 
-    engine_set_source_reverb_send(engine_, 0, pRevSend_->load());
+    for (uint32_t i = 0; i < 2; ++i)
+    {
+        engine_set_source_direct_path_gain(engine_, i, dp);
+        engine_set_source_occlusion(engine_, i, occ);
+        engine_set_source_directivity(engine_, i, dInner, dOuter, dGain, dLp);
+        engine_set_source_reverb_send(engine_, i, revSend);
+    }
+
     engine_set_reverb_amount(engine_, pRevAmount_->load());
-
     engine_set_externalizer_amount(engine_, pExtAmount_->load());
     engine_set_externalizer_character(engine_, pExtChar_->load());
 
     const float aLin = std::pow(10.0f, pDistAdB_->load() * 0.05f);
     const float bLin = std::pow(10.0f, pDistBdB_->load() * 0.05f);
     const float cLin = std::pow(10.0f, pDistCdB_->load() * 0.05f);
-    engine_set_source_distance_curve(
-        engine_, 0,
-        pDistA_->load(), aLin,
-        pDistB_->load(), bLin,
-        pDistC_->load(), cLin,
-        pDistD_->load());
+    for (uint32_t i = 0; i < 2; ++i)
+    {
+        engine_set_source_distance_curve(
+            engine_, i,
+            pDistA_->load(), aLin,
+            pDistB_->load(), bLin,
+            pDistC_->load(), cLin,
+            pDistD_->load());
+    }
 
-    engine_set_source_position_mode(engine_, 0,
-        (uint8_t) juce::roundToInt(pPosMode_->load()));
-    engine_set_source_rendering_mode(engine_, 0,
-        (uint8_t) juce::roundToInt(pRenderMode_->load()));
+    const uint8_t posMode = (uint8_t) juce::roundToInt(pPosMode_->load());
+    const uint8_t renMode = (uint8_t) juce::roundToInt(pRenderMode_->load());
+    for (uint32_t i = 0; i < 2; ++i)
+    {
+        engine_set_source_position_mode(engine_, i, posMode);
+        engine_set_source_rendering_mode(engine_, i, renMode);
+    }
 }
 
 void SpatialAudioProcessor::processOneEngineBlock()
 {
-    // Per-source 2×128 slab: [ch0_0..ch0_127, ch1_0..ch1_127].
-    float slab[ENGINE_BLOCK * 2];
+    // Linked stereo pair: 2 sources × 2 chans × 128 samples, source-major.
+    // Source 0 (L virtual speaker) eats the host's L input;
+    // source 1 (R virtual speaker) eats the host's R input.
+    // Both sources are mono (input_channel_count = 1); ch1 stays zero.
+    constexpr int slabPerSource = ENGINE_BLOCK * 2;
+    float inputs[slabPerSource * 2] = {};
     for (int i = 0; i < ENGINE_BLOCK; ++i)
     {
-        slab[i]                = inLRing_[(size_t) inRead_];
-        slab[ENGINE_BLOCK + i] = inRRing_[(size_t) inRead_];
+        inputs[i]                  = inLRing_[(size_t) inRead_];  // src 0, ch0
+        inputs[slabPerSource + i]  = inRRing_[(size_t) inRead_];  // src 1, ch0
         inRead_ = (inRead_ + 1) % RING_CAP;
     }
 
     float outL[ENGINE_BLOCK], outR[ENGINE_BLOCK];
-    engine_process_block(engine_, slab, 1, nullptr, 0, outL, outR);
+    engine_process_block(engine_, inputs, 2, nullptr, 0, outL, outR);
 
     for (int i = 0; i < ENGINE_BLOCK; ++i)
     {
@@ -397,14 +459,15 @@ void SpatialAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce:
     const int numIn = juce::jmin(buffer.getNumChannels(), 2);
     const float* inL = buffer.getReadPointer(0);
     const float* inR = numIn >= 2 ? buffer.getReadPointer(1) : nullptr;
-    // Tell the engine whether this source is mono or stereo so the
-    // §6.7 stereo-object path runs only when both channels are live.
+    // Both linked sources are mono: source 0 reads host L, source 1
+    // reads host R. With a mono host input, both sources get the same
+    // signal (collapses the pair to a single phantom point).
     if (engine_ != nullptr)
-        engine_set_source_input_channel_count(engine_, 0, inR != nullptr ? 2 : 1);
+    {
+        engine_set_source_input_channel_count(engine_, 0, 1);
+        engine_set_source_input_channel_count(engine_, 1, 1);
+    }
 
-    // Push host audio into the per-channel input rings (stereo
-    // pass-through; mono sources get the same data into ch1 but the
-    // engine ignores it via input_channel_count = 1).
     for (int i = 0; i < n; ++i)
     {
         inLRing_[(size_t) inWrite_] = inL[i];

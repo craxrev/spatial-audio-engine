@@ -285,3 +285,102 @@ fn engine_at_44_1k_resamples_hrtf_and_w_bin() {
     let r = energy(&e.stereo_out[1]);
     assert!(l > 0.0 && r > 0.0, "44.1k pipeline silent: L={l}, R={r}");
 }
+
+/// Equivalence test: the new "linked stereo pair at width = 0" config —
+/// two sources stacked at the same position, each fed one host channel —
+/// should produce audibly identical output to the old "single stereo
+/// object" config (one source, `input_channel_count = 2`, both host
+/// channels collapsed at the same position per spec §6.7).
+///
+/// Not bit-identical because the float accumulation order differs and
+/// ramps are duplicated, but within a few ULPs after the ramps settle.
+#[test]
+fn pair_at_zero_width_matches_legacy_mono_stereo_object() {
+    fn make_mono(x: f32, y: f32, z: f32) -> Engine {
+        let hrtf = Hrtf::load_from_bytes(HRTF_BYTES).expect("hrtf load");
+        let mut e = Engine::new(48000, 1);
+        e.load_main_hrtf(&hrtf);
+        e.set_source_active(0, true);
+        e.set_source_position(0, x, y, z);
+        e.set_source_gain(0, 1.0);
+        e.set_source_input_channel_count(0, 2);
+        e
+    }
+    fn make_pair(x: f32, y: f32, z: f32) -> Engine {
+        let hrtf = Hrtf::load_from_bytes(HRTF_BYTES).expect("hrtf load");
+        let mut e = Engine::new(48000, 2);
+        e.load_main_hrtf(&hrtf);
+        for i in 0..2 {
+            e.set_source_active(i, true);
+            e.set_source_position(i, x, y, z); // identical position = width 0
+            e.set_source_gain(i, 1.0);
+            e.set_source_input_channel_count(i, 1);
+        }
+        e
+    }
+
+    // Deterministic broadband stereo input: one impulse per channel.
+    let mut stereo_l = [0.0_f32; BLOCK_SIZE];
+    let mut stereo_r = [0.0_f32; BLOCK_SIZE];
+    stereo_l[0] = 1.0;
+    stereo_r[0] = 0.7;
+
+    let mono_slab: Vec<[[f32; BLOCK_SIZE]; 2]> = vec![[stereo_l, stereo_r]];
+    let zeros = [0.0_f32; BLOCK_SIZE];
+    let pair_slab: Vec<[[f32; BLOCK_SIZE]; 2]> = vec![
+        [stereo_l, zeros], // src 0 reads ch0 only (mono); L → ch0
+        [stereo_r, zeros], // src 1 reads ch0 only (mono); R → ch0
+    ];
+    let silence_mono: Vec<[[f32; BLOCK_SIZE]; 2]> = vec![[zeros, zeros]];
+    let silence_pair: Vec<[[f32; BLOCK_SIZE]; 2]> = vec![[zeros, zeros], [zeros, zeros]];
+
+    // Test several HRTF directions to make sure the equivalence isn't
+    // a happy coincidence at one position.
+    let positions = [
+        ( 5.0_f32,  0.0,  0.0), // front
+        ( 0.0,      5.0,  0.0), // left
+        ( 0.0,     -5.0,  0.0), // right
+        ( 0.0,      0.0,  5.0), // above
+        ( 3.0,      4.0,  0.0), // off-axis horizontal
+    ];
+
+    for (x, y, z) in positions {
+        let mut e_mono = make_mono(x, y, z);
+        let mut e_pair = make_pair(x, y, z);
+
+        // Settle: a couple blocks of silence so gain / directivity /
+        // SH-crossfade ramps reach their steady state before measuring.
+        for _ in 0..3 {
+            e_mono.process_block(&silence_mono, &[]);
+            e_pair.process_block(&silence_pair, &[]);
+        }
+
+        // Now drive an impulse + observe one block.
+        e_mono.process_block(&mono_slab, &[]);
+        e_pair.process_block(&pair_slab, &[]);
+
+        // Then capture several tail blocks (HRTF response runs out
+        // ~128 taps long).
+        let mut max_diff = 0.0_f32;
+        for _ in 0..4 {
+            e_mono.process_block(&silence_mono, &[]);
+            e_pair.process_block(&silence_pair, &[]);
+            for ch in 0..2 {
+                for i in 0..BLOCK_SIZE {
+                    let d = (e_mono.stereo_out[ch][i] - e_pair.stereo_out[ch][i]).abs();
+                    if d > max_diff {
+                        max_diff = d;
+                    }
+                }
+            }
+        }
+
+        // Tolerance: sub-LSB float drift accumulates across SH-encode +
+        // 16-channel HRTF convolution + externalizer + W-binauralizer.
+        // 5e-5 is comfortably below any audible threshold (>−85 dB FS).
+        assert!(
+            max_diff < 5e-5,
+            "pair@width=0 should match mono stereo-object at ({x},{y},{z}); max_diff = {max_diff}"
+        );
+    }
+}

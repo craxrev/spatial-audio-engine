@@ -67,6 +67,7 @@ private:
     std::atomic<float>* pDist_      = nullptr;
     std::atomic<float>* pAzim_      = nullptr;
     std::atomic<float>* pElev_      = nullptr;
+    std::atomic<float>* pWidth_     = nullptr;
     std::atomic<float>* pGainDb_    = nullptr;
     std::atomic<float>* pListenerX_ = nullptr;
     std::atomic<float>* pListenerY_ = nullptr;

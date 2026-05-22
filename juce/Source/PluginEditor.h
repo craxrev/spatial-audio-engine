@@ -45,6 +45,8 @@ private:
 
     juce::Slider     gainSlider_;
     juce::Label      gainLabel_;
+    juce::Slider     widthSlider_;
+    juce::Label      widthLabel_;
     juce::Slider     occlusionSlider_;
     juce::Label      occlusionLabel_;
     juce::Slider     spreadSlider_;
@@ -81,6 +83,7 @@ private:
     using ButtonAttachment   = juce::AudioProcessorValueTreeState::ButtonAttachment;
     using ComboBoxAttachment = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
     std::unique_ptr<SliderAttachment> gainAttachment_;
+    std::unique_ptr<SliderAttachment> widthAttachment_;
     std::unique_ptr<SliderAttachment> occlusionAttachment_;
     std::unique_ptr<SliderAttachment> spreadAttachment_;
     std::unique_ptr<SliderAttachment> focusAttachment_;
