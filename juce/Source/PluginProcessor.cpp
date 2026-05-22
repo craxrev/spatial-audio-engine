@@ -101,6 +101,19 @@ SpatialAudioProcessor::makeParameterLayout()
     layout.add(std::make_unique<P>(juce::ParameterID{"gain_db",    1}, "Gain",
                                     R{-80.0f, 12.0f, 0.1f},   0.0f,
                                     Attrs().withStringFromValueFunction(fmtDb)));
+    // Look-target (world-locked Cartesian point both sources aim at when
+    // Aim-at-listener is OFF). Default (0,0,0) = listener origin, so
+    // unlocked mode initially behaves identically to locked until the
+    // user drags the arrow.
+    layout.add(std::make_unique<P>(juce::ParameterID{"target_x", 1}, "Target X",
+                                    R{-50.0f, 50.0f, 0.01f},  0.0f,
+                                    Attrs().withStringFromValueFunction(fmtMeters)));
+    layout.add(std::make_unique<P>(juce::ParameterID{"target_y", 1}, "Target Y",
+                                    R{-50.0f, 50.0f, 0.01f},  0.0f,
+                                    Attrs().withStringFromValueFunction(fmtMeters)));
+    layout.add(std::make_unique<P>(juce::ParameterID{"target_z", 1}, "Target Z",
+                                    R{-50.0f, 50.0f, 0.01f},  0.0f,
+                                    Attrs().withStringFromValueFunction(fmtMeters)));
     layout.add(std::make_unique<P>(juce::ParameterID{"listener_x", 1}, "Listener X",
                                     R{-50.0f, 50.0f, 0.01f},  0.0f,
                                     Attrs().withStringFromValueFunction(fmtMeters)));
@@ -220,6 +233,9 @@ SpatialAudioProcessor::SpatialAudioProcessor()
     pElev_      = apvts.getRawParameterValue("elevation");
     pWidth_     = apvts.getRawParameterValue("width");
     pGainDb_    = apvts.getRawParameterValue("gain_db");
+    pTargetX_   = apvts.getRawParameterValue("target_x");
+    pTargetY_   = apvts.getRawParameterValue("target_y");
+    pTargetZ_   = apvts.getRawParameterValue("target_z");
     pListenerX_ = apvts.getRawParameterValue("listener_x");
     pListenerY_ = apvts.getRawParameterValue("listener_y");
     pListenerZ_ = apvts.getRawParameterValue("listener_z");
@@ -348,32 +364,49 @@ void SpatialAudioProcessor::applyParametersToEngine()
     eulerToQuat(pYaw_->load(), pPitch_->load(), pRoll_->load(), qw, qx, qy, qz);
     engine_set_listener_rotation(engine_, qw, qx, qy, qz);
 
-    // Each virtual speaker faces the listener when "Aim at listener"
-    // is on — that means yaw = azim + 180°, computed per source.
-    // When off, both share the user-set source_yaw value.
-    const bool  aim      = apvts.getRawParameterValue("aim_at_listener")->load() > 0.5f;
-    const float srcPitch = pSrcPitch_->load();
-    auto applyRot = [&](uint32_t idx, float yawDeg) {
-        float sqw, sqx, sqy, sqz;
-        eulerToQuat(yawDeg, srcPitch, 0.0f, sqw, sqx, sqy, sqz);
-        engine_set_source_rotation(engine_, idx, sqw, sqx, sqy, sqz);
+    // Both sources aim at a single world-locked target point.
+    // Aim ON: target = listener position. Aim OFF: target = user-set
+    // (target_x, target_y, target_z). Per-source rotation is the
+    // shortest-arc quaternion that rotates +X (the source's default
+    // forward) to the source→target unit vector.
+    const bool  aim = apvts.getRawParameterValue("aim_at_listener")->load() > 0.5f;
+    const float tx  = aim ? pListenerX_->load() : pTargetX_->load();
+    const float ty  = aim ? pListenerY_->load() : pTargetY_->load();
+    const float tz  = aim ? pListenerZ_->load() : pTargetZ_->load();
+
+    auto aimSourceAt = [&](uint32_t idx, float sx, float sy, float sz) {
+        const float dx = tx - sx, dy = ty - sy, dz = tz - sz;
+        const float len = std::sqrt(dx * dx + dy * dy + dz * dz);
+        if (len < 1e-6f)
+        {
+            engine_set_source_rotation(engine_, idx, 1.0f, 0.0f, 0.0f, 0.0f);
+            return;
+        }
+        const float fx = dx / len, fy = dy / len, fz = dz / len;
+        // cos(angle) between (1,0,0) and forward.
+        const float cosA = fx;
+        if (cosA < -0.99999f)
+        {
+            // Antiparallel: 180° around +Z (compass-up axis).
+            engine_set_source_rotation(engine_, idx, 0.0f, 0.0f, 0.0f, 1.0f);
+            return;
+        }
+        // Shortest-arc quat: (1+cosA, axis=cross((1,0,0), forward)).
+        float qw = 1.0f + cosA;
+        float qx = 0.0f;
+        float qy = -fz;
+        float qz = fy;
+        const float n = std::sqrt(qw*qw + qx*qx + qy*qy + qz*qz);
+        if (n < 1e-9f)
+        {
+            engine_set_source_rotation(engine_, idx, 1.0f, 0.0f, 0.0f, 0.0f);
+            return;
+        }
+        qw /= n; qx /= n; qy /= n; qz /= n;
+        engine_set_source_rotation(engine_, idx, qw, qx, qy, qz);
     };
-    auto wrap = [](float a) {
-        while (a >  180.0f) a -= 360.0f;
-        while (a < -180.0f) a += 360.0f;
-        return a;
-    };
-    if (aim)
-    {
-        applyRot(0, wrap(azimL + 180.0f));
-        applyRot(1, wrap(azimR + 180.0f));
-    }
-    else
-    {
-        const float y = pSrcYaw_->load();
-        applyRot(0, y);
-        applyRot(1, y);
-    }
+    aimSourceAt(0, lx, ly, lz);
+    aimSourceAt(1, rx, ry, rz);
 
     const float dp  = pDpGain_->load();
     const float occ = pOcclusion_->load();

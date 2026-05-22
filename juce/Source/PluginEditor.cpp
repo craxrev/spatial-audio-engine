@@ -314,9 +314,41 @@ public:
             }
         }
 
-        // Audibility contour — wireframe outline (phosphor) at two
-        // intensity levels. No fills: this is a stroke-only aesthetic.
-        const float yaw     = displayedYaw_;
+        // World-locked target the pair aims at. Aim ON → listener
+        // position (locked mode); Aim OFF → user-set target_(x,y,z).
+        const bool  aimOn = state_.getRawParameterValue("aim_at_listener")->load() > 0.5f;
+        const float tgtX  = aimOn ? state_.getRawParameterValue("listener_x")->load()
+                                  : state_.getRawParameterValue("target_x")->load();
+        const float tgtY  = aimOn ? state_.getRawParameterValue("listener_y")->load()
+                                  : state_.getRawParameterValue("target_y")->load();
+        // Native → compass screen pixel mapping (matches azimDistToScreen):
+        //   screen = centre + (-y_native, -x_native) · (outerR / kCompassMaxMeters)
+        const float pxPerM = outerR / kCompassMaxMeters;
+        const juce::Point<float> tgtScreen {
+            centre.x - tgtY * pxPerM,
+            centre.y - tgtX * pxPerM
+        };
+
+        // Native position of each L/R virtual speaker (z = elevation,
+        // ignored for compass; elevation has its own strip).
+        const float elRad = juce::degreesToRadians(state_.getRawParameterValue("elevation")->load());
+        const float ce    = std::cos(elRad);
+        const float aLRad = juce::degreesToRadians(az + wHalf);
+        const float aRRad = juce::degreesToRadians(az - wHalf);
+        const float lAtmX = dist * ce * std::cos(aLRad);
+        const float lAtmY = dist * ce * std::sin(aLRad);
+        const float rAtmX = dist * ce * std::cos(aRRad);
+        const float rAtmY = dist * ce * std::sin(aRRad);
+
+        // Per-source contour yaw (compass-frame degrees, matching
+        // compassDir convention) = atan2(delta.native.y, delta.native.x)
+        // of the source→target vector, in degrees.
+        auto yawDegFromNativeDelta = [](float dx, float dy) {
+            return juce::radiansToDegrees(std::atan2(dy, dx));
+        };
+        const float yawL = yawDegFromNativeDelta(tgtX - lAtmX, tgtY - lAtmY);
+        const float yawR = yawDegFromNativeDelta(tgtX - rAtmX, tgtY - rAtmY);
+
         const float outerLp = state_.getRawParameterValue("dir_outer_lp")->load();
         const juce::Colour warm  (theme::audibleWarm);
         const juce::Colour slate (theme::audibleCool);
@@ -325,20 +357,26 @@ public:
         constexpr float kAudibleThresh = 0.0631f; // −24 dB
         constexpr float kLoudThresh    = 0.5f;    // −6 dB
 
-        g.setColour(tint.withAlpha(0.22f));
-        g.strokePath(buildAudibilityContour(src, yaw, kAudibleThresh),
-                     juce::PathStrokeType(0.8f));
-        g.setColour(tint.withAlpha(0.55f));
-        g.strokePath(buildAudibilityContour(src, yaw, kLoudThresh),
-                     juce::PathStrokeType(1.2f));
+        auto drawSourceContour = [&](juce::Point<float> pos, float yawDeg) {
+            g.setColour(tint.withAlpha(0.22f));
+            g.strokePath(buildAudibilityContour(pos, yawDeg, kAudibleThresh),
+                         juce::PathStrokeType(0.8f));
+            g.setColour(tint.withAlpha(0.55f));
+            g.strokePath(buildAudibilityContour(pos, yawDeg, kLoudThresh),
+                         juce::PathStrokeType(1.2f));
+        };
+        drawSourceContour(srcL, yawL);
+        drawSourceContour(srcR, yawR);
 
-        // Heading arrow — phosphor stroke with glow underlay.
-        const float arrowLen = 28.0f;
-        const auto arrowTip = src + compassDir(yaw) * arrowLen;
-        drawPhosphorLine(g, src, arrowTip, 1.8f, theme::src, theme::glow);
-        // Arrowhead.
+        // Arrow from the midpoint to the target tip. Drag-target when
+        // Aim at listener is off; auto-points at the listener when on.
+        const auto arrowTip = tgtScreen;
+        const auto arrowVec = arrowTip - src;
+        const float arrowLen = arrowVec.getDistanceFromOrigin();
+        if (arrowLen > 1.0f)
         {
-            const auto dir = compassDir(yaw);
+            drawPhosphorLine(g, src, arrowTip, 1.8f, theme::src, theme::glow);
+            const auto dir = arrowVec / arrowLen;
             const juce::Point<float> perp { -dir.y, dir.x };
             juce::Path head;
             head.addTriangle(arrowTip.x + dir.x * 6.0f,  arrowTip.y + dir.y * 6.0f,
@@ -359,13 +397,11 @@ public:
             const float ringR = metersToPixels(dist);
             if (ringR > 1.0f && currentWidth() > 0.01f)
             {
-                // azimDistToScreen wraps the compass: 0° = up (−Y screen),
-                // +90° (left azimuth) = −X screen. Build a path that
-                // sweeps from azimR to azimL through the centre azimuth.
+                // Compass convention (matches azimDistToScreen):
+                //   pt = centre + (-sin(a), -cos(a)) · r
+                // so 0° = up (front), +90° = screen-left, -90° = right.
                 const float aL = juce::degreesToRadians(az + wHalf);
                 const float aR = juce::degreesToRadians(az - wHalf);
-                // Screen-space angle convention used by compassDir:
-                // pt = centre + (sin(a), -cos(a)) · r
                 juce::Path arc;
                 const int steps = juce::jmax(8, (int) (currentWidth() * 0.5f));
                 for (int i = 0; i <= steps; ++i)
@@ -373,7 +409,7 @@ public:
                     const float t = (float) i / (float) steps;
                     const float a = aR + (aL - aR) * t;
                     const juce::Point<float> p {
-                        centre.x + std::sin(a) * ringR,
+                        centre.x - std::sin(a) * ringR,
                         centre.y - std::cos(a) * ringR
                     };
                     if (i == 0) arc.startNewSubPath(p); else arc.lineTo(p);
@@ -408,7 +444,7 @@ public:
         g.setFont(font11());
         const auto info = juce::String("R ") + juce::String(dist, 2) + "M  AZ "
                         + juce::String(az, 1) + kGlyphDeg + "  YAW "
-                        + juce::String(yaw, 1) + kGlyphDeg;
+                        + juce::String(displayedYaw_, 1) + kGlyphDeg;
         g.drawText(info, juce::Rectangle<int>(8, 8, getWidth() - 16, 14),
                    juce::Justification::topLeft);
         g.setColour(juce::Colour(theme::phosphor2));
@@ -462,41 +498,45 @@ private:
 
     void timerCallback() override
     {
-        // Aim-at-listener: lock source_yaw to face the listener (compass
-        // centre). Yaw = azim + 180° (source faces back toward origin).
-        const bool aim = state_.getRawParameterValue("aim_at_listener")->load() > 0.5f;
-        if (aim && activeDrag_ != DragTarget::Heading)
-        {
-            const float target = wrap180(currentAzimuth() + 180.0f);
-            const float curr   = state_.getRawParameterValue("source_yaw")->load();
-            if (std::abs(wrap180(target - curr)) > 0.05f)
-                setParam("source_yaw", target);
-        }
+        // Smoothed "displayed yaw" = the arrow's screen direction (from
+        // midpoint to target tip), used only for the top-left info text.
+        // Engine aim is driven directly by target_(x,y,z) via the
+        // processor, not by this value.
+        const auto srcPx = sourceScreen();
+        const auto tgtPx = targetScreen();
+        const auto vArr  = tgtPx - srcPx;
+        const float arrowYaw = vArr.getDistanceFromOrigin() > 1.0f
+            ? compassAngleDeg(vArr)
+            : displayedYaw_;
 
-        const float pyaw  = state_.getRawParameterValue("source_yaw")->load();
         const float poccl = state_.getRawParameterValue("occlusion")->load();
         const float prevDispYaw  = displayedYaw_;
         const float prevDispOccl = displayedOcclusion_;
         if (firstTick_)
         {
-            displayedYaw_       = pyaw;
+            displayedYaw_       = arrowYaw;
             displayedOcclusion_ = poccl;
             firstTick_          = false;
         }
         else
         {
-            displayedYaw_       = wrap180(angleLerp(displayedYaw_, pyaw, 0.25f));
+            displayedYaw_       = wrap180(angleLerp(displayedYaw_, arrowYaw, 0.25f));
             displayedOcclusion_ += (poccl - displayedOcclusion_) * 0.18f;
         }
 
         // Conditional repaint: skip when nothing has changed since last
         // frame. Tracks contour-shape inputs (source pos, directivity,
-        // gain, distance curve) + smoothed values + drag state. JUCE's
-        // setBufferedToImage cache then reuses the last buffer for free.
-        const float snap[16] = {
+        // gain, distance curve, target tip) + smoothed values + drag state.
+        const float snap[20] = {
             currentDistance(),
             currentAzimuth(),
             currentWidth(),
+            state_.getRawParameterValue("elevation")     ->load(),
+            state_.getRawParameterValue("target_x")      ->load(),
+            state_.getRawParameterValue("target_y")      ->load(),
+            state_.getRawParameterValue("listener_x")    ->load(),
+            state_.getRawParameterValue("listener_y")    ->load(),
+            state_.getRawParameterValue("aim_at_listener")->load(),
             state_.getRawParameterValue("dir_inner_deg") ->load(),
             state_.getRawParameterValue("dir_outer_deg") ->load(),
             state_.getRawParameterValue("dir_outer_gain")->load(),
@@ -508,13 +548,11 @@ private:
             state_.getRawParameterValue("dist_b")        ->load(),
             state_.getRawParameterValue("dist_b_db")     ->load(),
             state_.getRawParameterValue("dist_c")        ->load(),
-            state_.getRawParameterValue("dist_c_db")     ->load(),
-            state_.getRawParameterValue("dist_d")        ->load(),
         };
         bool changed = activeDrag_ != DragTarget::None
                     || std::abs(displayedYaw_  - prevDispYaw)  > 0.02f
                     || std::abs(displayedOcclusion_ - prevDispOccl) > 0.001f;
-        for (int i = 0; i < 16; ++i)
+        for (int i = 0; i < 20; ++i)
             if (snap[i] != prevSnap_[i]) { prevSnap_[i] = snap[i]; changed = true; }
         if (changed) repaint();
     }
@@ -534,6 +572,18 @@ private:
     {
         return azimDistToScreen(centre(), outerRadius(),
                                 currentAzimuth(), currentDistance(), kCompassMaxMeters);
+    }
+
+    juce::Point<float> targetScreen() const
+    {
+        const bool aimOn = state_.getRawParameterValue("aim_at_listener")->load() > 0.5f;
+        const float tx = aimOn ? state_.getRawParameterValue("listener_x")->load()
+                               : state_.getRawParameterValue("target_x")->load();
+        const float ty = aimOn ? state_.getRawParameterValue("listener_y")->load()
+                               : state_.getRawParameterValue("target_y")->load();
+        const float pxPerM = outerRadius() / kCompassMaxMeters;
+        const auto c = centre();
+        return juce::Point<float>(c.x - ty * pxPerM, c.y - tx * pxPerM);
     }
 
     float currentDistance() const { return state_.getRawParameterValue("distance")->load(); }
@@ -632,8 +682,8 @@ private:
     {
         const auto src = sourceScreen();
 
-        // Heading handle.
-        const auto headTip = src + compassDir(displayedYaw_) * 28.0f;
+        // Heading handle: hit-test against the world-locked target tip.
+        const auto headTip = targetScreen();
         if (p.getDistanceFrom(headTip) <= 9.0f) return DragTarget::Heading;
 
         // Source dot fallback (large hit box).
@@ -668,15 +718,23 @@ private:
 
     void applyHeading(juce::Point<float> p, bool snap)
     {
-        const auto src = sourceScreen();
-        const auto v   = p - src;
-        if (v.getDistanceFromOrigin() < 1.0f) return;
-        float yawDeg = compassAngleDeg(v);
+        // Drag writes target_(x,y) in world-locked native Cartesian.
+        // Aim-at-listener is auto-disabled if the user grabs the tip,
+        // matching the prior heading-drag UX (drag = manual control).
+        const auto c = centre();
+        const float pxPerM = outerRadius() / kCompassMaxMeters;
+        if (pxPerM < 1e-3f) return;
+        float ty = -(p.x - c.x) / pxPerM;
+        float tx = -(p.y - c.y) / pxPerM;
         if (snap)
-            yawDeg = snapSymmetric(yawDeg, {0.0f, 30.0f, 45.0f, 60.0f, 90.0f, 120.0f, 135.0f, 150.0f, 180.0f});
-        setParam("source_yaw", yawDeg);
-        // Drive displayed_ directly during drag so the wedge tracks the mouse.
-        displayedYaw_ = yawDeg;
+        {
+            // Snap to integer-metre grid for tidy positioning.
+            tx = std::round(tx);
+            ty = std::round(ty);
+        }
+        setBoolParam("aim_at_listener", false);
+        setParam("target_x", tx);
+        setParam("target_y", ty);
     }
 
     void setBoolParam(const char* id, bool v)
@@ -815,7 +873,9 @@ private:
     float displayedOcclusion_ = 0.0f;
     bool  firstTick_          = true;
     juce::Image backgroundImage_;
-    float prevSnap_[16] = {
+    float prevSnap_[20] = {
+        std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN(),
+        std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN(),
         std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN(),
         std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN(),
         std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN(),
@@ -1536,7 +1596,7 @@ SpatialAudioEditor::SpatialAudioEditor(SpatialAudioProcessor& p)
         advancedOpen_ = !advancedOpen_;
         advancedButton_.setButtonText("Advanced " + (advancedOpen_ ? kGlyphUp : kGlyphDown));
         setAdvVisible(advancedOpen_);
-        setSize(580, advancedOpen_ ? 784 : 760);
+        setSize(580, advancedOpen_ ? 808 : 784);
     };
     addAndMakeVisible(advancedButton_);
 
@@ -1548,7 +1608,7 @@ SpatialAudioEditor::SpatialAudioEditor(SpatialAudioProcessor& p)
     resetButton_.onClick = [this] { resetAllParams(); };
     addAndMakeVisible(resetButton_);
 
-    setSize(580, 760);
+    setSize(580, 784);
 }
 
 SpatialAudioEditor::~SpatialAudioEditor()
@@ -1596,6 +1656,7 @@ void SpatialAudioEditor::resetAllParams()
 {
     constexpr const char* ids[] = {
         "distance", "azimuth", "elevation", "width", "gain_db",
+        "target_x", "target_y", "target_z",
         "listener_x", "listener_y", "listener_z",
         "yaw", "pitch", "roll",
         "source_yaw", "source_pitch",
