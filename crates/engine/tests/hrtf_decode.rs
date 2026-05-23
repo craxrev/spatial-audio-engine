@@ -53,6 +53,29 @@ fn build_engine_with_source_at(x: f32, y: f32, z: f32) -> Engine {
 }
 
 #[test]
+fn listener_rotation_changes_binaural_output() {
+    // Source fixed in world at +Y (listener's left when un-rotated).
+    let mut e = build_engine_with_source_at(0.0, 5.0, 0.0);
+    let (l0, r0) = impulse_tail_energy(&mut e, 16);
+    let ratio0 = l0 / r0.max(1e-12);
+
+    // Same engine, same source, but rotate listener +90° about Z (yaw left).
+    // World +Y is now at the listener's +X = directly in front, so L/R
+    // energy should equalise (ratio drops toward 1).
+    let mut e = build_engine_with_source_at(0.0, 5.0, 0.0);
+    let s = std::f32::consts::FRAC_PI_4.sin();
+    let c = std::f32::consts::FRAC_PI_4.cos();
+    e.set_listener_rotation(c, 0.0, 0.0, s);
+    let (l1, r1) = impulse_tail_energy(&mut e, 16);
+    let ratio1 = l1 / r1.max(1e-12);
+
+    assert!(ratio0 > 1.5,
+        "unrotated: source on left should bias L > R (got ratio {ratio0:.3})");
+    assert!(ratio1 < ratio0 * 0.75,
+        "rotated +90°: L/R should equalise vs unrotated (ratio0={ratio0:.3} ratio1={ratio1:.3})");
+}
+
+#[test]
 fn stereo_output_is_nonzero_after_decode() {
     let mut e = build_engine_with_source_at(0.0, 0.0, 1.0); // overhead omni-ish
     settle(&mut e, &dc_input(), 8);
