@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 
@@ -17,7 +18,14 @@ class HeadPoseProcessor
 public:
     // Smoother time constant, seconds. Audio-thread param (no smoothing of
     // the smoother itself; just used to compute alpha per block).
+    // Buds 2 Pro raw rate is motion-gated (~50 Hz moving, ~14 Hz still); to
+    // keep responsiveness during motion bursts and suppress jitter during
+    // slow motion, tau adapts to recent inter-arrival as
+    //   tau_adapt = clamp(tauGain * mean_interval, tauSeconds, tauMaxSec).
+    // With no fresh samples, tauSeconds is used directly.
     float tauSeconds = 0.040f;
+    float tauMaxSec  = 0.080f;
+    float tauGain    = 2.0f;
 
     // ---- producer thread API ----
     // Called whenever the tracker has a fresh raw pose.
@@ -29,6 +37,18 @@ public:
         slots_[next] = q;
         publishCount_.store(publishCount_.load(std::memory_order_relaxed) + 1,
                             std::memory_order_release);
+
+        // Track mean inter-arrival for adaptive tau. Producer thread only.
+        const auto now = std::chrono::steady_clock::now();
+        if (lastSetRawValid_)
+        {
+            const float dt = std::chrono::duration<float>(now - lastSetRawTime_).count();
+            const float prev = meanIntervalSec_.load(std::memory_order_relaxed);
+            const float mix  = prev > 0.0f ? (prev * 0.9f + dt * 0.1f) : dt;
+            meanIntervalSec_.store(mix, std::memory_order_relaxed);
+        }
+        lastSetRawTime_ = now;
+        lastSetRawValid_ = true;
     }
 
     // ---- UI thread API ----
@@ -78,7 +98,14 @@ public:
             target = transformBudToNative(delta);
         }
 
-        const float tau = tauSeconds > 1e-4f ? tauSeconds : 1e-4f;
+        float tau = tauSeconds > 1e-4f ? tauSeconds : 1e-4f;
+        const float mi = meanIntervalSec_.load(std::memory_order_relaxed);
+        if (mi > 0.0f)
+        {
+            const float adaptive = tauGain * mi;
+            if (adaptive > tau) tau = adaptive;
+            if (tau > tauMaxSec) tau = tauMaxSec;
+        }
         const float alpha = 1.0f - std::exp(-(float)dtSec / tau);
         smoothed_ = slerp(smoothed_, target, alpha);
         normalize(smoothed_);
@@ -100,6 +127,11 @@ private:
     inline static std::atomic<float> sQRefConj_[4] { {1.0f}, {0.0f}, {0.0f}, {0.0f} };
 
     Quat smoothed_ = Quat::identity();
+
+    // Adaptive-tau interval tracking. Producer-thread state.
+    std::chrono::steady_clock::time_point lastSetRawTime_ {};
+    bool lastSetRawValid_ = false;
+    std::atomic<float> meanIntervalSec_ { 0.0f };
 
     Quat loadLatestRaw() const noexcept
     {
