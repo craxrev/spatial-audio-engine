@@ -1795,6 +1795,7 @@ void SpatialAudioEditor::resetAllParams()
         "dist_c", "dist_c_db", "dist_d",
         "position_mode", "rendering_mode",
         "aim_at_listener",
+        "head_tracking_enabled",
     };
     for (auto* id : ids)
     {
@@ -1805,6 +1806,9 @@ void SpatialAudioEditor::resetAllParams()
             p->endChangeGesture();
         }
     }
+    // Calibration is not an APVTS param — clear it explicitly so a reset
+    // restores the "uncalibrated" state.
+    proc_.clearHeadTrackerRef();
 }
 
 void SpatialAudioEditor::paint(juce::Graphics& g)

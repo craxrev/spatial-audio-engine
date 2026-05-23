@@ -24,6 +24,7 @@ public:
     HeadTracker::Status getHeadTrackerStatus() const noexcept { return headStatus_.load(); }
     bool                isHeadPoseReferenced() const noexcept { return headPose_.hasRef(); }
     void                recentreHeadTracker() noexcept { headPose_.recentreFromLatestRaw(); }
+    void                clearHeadTrackerRef() noexcept { headPose_.clearRef(); }
     float               getEffectiveYawDeg()  const noexcept { return effectiveYawDeg_.load(); }
     uint64_t            getHeadTrackerFrameId() const noexcept;
     Quat                getEffectiveQuat() const noexcept
