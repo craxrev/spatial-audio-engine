@@ -5,6 +5,8 @@
 
 #include "BinaryData.h"
 
+#include "Trackers/OscHeadTracker.h"
+
 namespace
 {
 // Spherical (distance/azimuth/elevation) → native-Cartesian
@@ -215,6 +217,9 @@ SpatialAudioProcessor::makeParameterLayout()
     layout.add(std::make_unique<juce::AudioParameterBool>(
         juce::ParameterID{"aim_at_listener", 1}, "Aim at listener", true));
 
+    layout.add(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID{"head_tracking_enabled", 1}, "Head tracking", false));
+
     return layout;
 }
 
@@ -264,15 +269,54 @@ SpatialAudioProcessor::SpatialAudioProcessor()
     pPosMode_   = apvts.getRawParameterValue("position_mode");
     pRenderMode_= apvts.getRawParameterValue("rendering_mode");
 
+    initHeadTracker();
+    apvts.addParameterListener("head_tracking_enabled", this);
+
     setLatencySamples(ENGINE_BLOCK);
 }
 
 SpatialAudioProcessor::~SpatialAudioProcessor()
 {
+    apvts.removeParameterListener("head_tracking_enabled", this);
+    shutdownHeadTracker();
+
     if (engine_ != nullptr)
     {
         engine_destroy(engine_);
         engine_ = nullptr;
+    }
+}
+
+uint64_t SpatialAudioProcessor::getHeadTrackerFrameId() const noexcept
+{
+    uint64_t f = 0;
+    (void)OscHeadTracker::shared().latestPose(&f);
+    return f;
+}
+
+void SpatialAudioProcessor::initHeadTracker()
+{
+    // Process-shared singleton — hosts may load this AU multiple times in
+    // the same process and only one instance can bind the OSC port. The
+    // shared tracker means all instances see the same pose.
+    auto& shared = OscHeadTracker::shared();
+    shared.start();  // idempotent
+    if (! shared.onStatusChange)
+        shared.onStatusChange = [](HeadTracker::Status) {};  // first instance: install no-op (editor polls)
+}
+
+void SpatialAudioProcessor::shutdownHeadTracker()
+{
+    // No-op: shared singleton persists for process lifetime.
+}
+
+void SpatialAudioProcessor::parameterChanged(const juce::String& id, float v)
+{
+    if (id == "head_tracking_enabled")
+    {
+        // Shared tracker is already started in initHeadTracker(); the
+        // toggle just gates whether the audio thread applies its rotation.
+        if (v > 0.5f) OscHeadTracker::shared().start();
     }
 }
 
@@ -332,7 +376,7 @@ bool SpatialAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) c
         && layouts.getMainInputChannels()  <= 2;
 }
 
-void SpatialAudioProcessor::applyParametersToEngine()
+void SpatialAudioProcessor::applyParametersToEngine(int hostBufferSamples)
 {
     if (engine_ == nullptr) return;
 
@@ -361,8 +405,37 @@ void SpatialAudioProcessor::applyParametersToEngine()
         pListenerX_->load(), pListenerY_->load(), pListenerZ_->load());
 
     float qw, qx, qy, qz;
-    eulerToQuat(pYaw_->load(), pPitch_->load(), pRoll_->load(), qw, qx, qy, qz);
+    const bool htEnabled = apvts.getRawParameterValue("head_tracking_enabled")->load() > 0.5f;
+    if (htEnabled)
+    {
+        // Pull the freshest raw pose from the tracker, then run the
+        // audio-thread pose pipeline (re-centre → bud→native → SLERP).
+        headPose_.setRaw(OscHeadTracker::shared().latestPose());
+        headStatus_.store(OscHeadTracker::shared().status());
+        const double sr = getSampleRate() > 0.0 ? getSampleRate() : 48000.0;
+        // dt = actual elapsed real time since the previous applyParametersToEngine
+        // call. This function runs once per HOST buffer (not once per engine
+        // block), so use the host buffer duration.
+        const double dt = (double)hostBufferSamples / sr;
+        const Quat q = headPose_.process(dt, headStatus_);
+        qw = q.w; qx = q.x; qy = q.y; qz = q.z;
+    }
+    else
+    {
+        eulerToQuat(pYaw_->load(), pPitch_->load(), pRoll_->load(), qw, qx, qy, qz);
+        headPose_.resetSmoother();  // keep smoother latched at identity
+    }
     engine_set_listener_rotation(engine_, qw, qx, qy, qz);
+    effQw_.store(qw, std::memory_order_relaxed);
+    effQx_.store(qx, std::memory_order_relaxed);
+    effQy_.store(qy, std::memory_order_relaxed);
+    effQz_.store(qz, std::memory_order_relaxed);
+
+    // Z-component yaw of the listener quaternion. UI uses this to rotate the
+    // compass world around the (fixed) listener arrow.
+    const float yawRad = std::atan2(2.0f * (qw * qz + qx * qy),
+                                    1.0f - 2.0f * (qy * qy + qz * qz));
+    effectiveYawDeg_.store(juce::radiansToDegrees(yawRad), std::memory_order_relaxed);
 
     // Both sources aim at a single world-locked target point.
     // Aim ON: target = listener position. Aim OFF: target = user-set
@@ -486,7 +559,7 @@ void SpatialAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce:
         return;
     }
 
-    applyParametersToEngine();
+    applyParametersToEngine(buffer.getNumSamples());
 
     const int n = buffer.getNumSamples();
     const int numIn = juce::jmin(buffer.getNumChannels(), 2);

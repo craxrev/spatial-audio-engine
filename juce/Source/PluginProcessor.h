@@ -1,19 +1,35 @@
 #pragma once
 
 #include <atomic>
+#include <memory>
 #include <vector>
 
 #include <juce_audio_processors/juce_audio_processors.h>
+
+#include "HeadPoseProcessor.h"
+#include "HeadTracker.h"
 
 extern "C" {
 #include "engine.h"
 }
 
-class SpatialAudioProcessor : public juce::AudioProcessor
+class SpatialAudioProcessor : public juce::AudioProcessor,
+                              private juce::AudioProcessorValueTreeState::Listener
 {
 public:
     SpatialAudioProcessor();
     ~SpatialAudioProcessor() override;
+
+    // UI hooks (message thread).
+    HeadTracker::Status getHeadTrackerStatus() const noexcept { return headStatus_.load(); }
+    bool                isHeadPoseReferenced() const noexcept { return headPose_.hasRef(); }
+    void                recentreHeadTracker() noexcept { headPose_.recentreFromLatestRaw(); }
+    float               getEffectiveYawDeg()  const noexcept { return effectiveYawDeg_.load(); }
+    uint64_t            getHeadTrackerFrameId() const noexcept;
+    Quat                getEffectiveQuat() const noexcept
+    {
+        return { effQw_.load(), effQx_.load(), effQy_.load(), effQz_.load() };
+    }
 
     void prepareToPlay(double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;
@@ -45,11 +61,21 @@ public:
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout makeParameterLayout();
 
-    void applyParametersToEngine();
+    void applyParametersToEngine(int hostBufferSamples);
     void processOneEngineBlock();
+
+    void initHeadTracker();
+    void shutdownHeadTracker();
+
+    void parameterChanged(const juce::String& id, float newValue) override;
 
     Engine* engine_ = nullptr;
     bool hrtfLoaded_ = false;
+
+    HeadPoseProcessor            headPose_;
+    std::atomic<HeadTracker::Status> headStatus_ { HeadTracker::Status::Disconnected };
+    std::atomic<float>           effectiveYawDeg_ { 0.0f };
+    std::atomic<float>           effQw_ { 1.0f }, effQx_ { 0.0f }, effQy_ { 0.0f }, effQz_ { 0.0f };
 
     // Fixed-128-sample chunker between host's variable block size
     // and the engine's quantum. ENGINE_BLOCK is hardcoded; engine

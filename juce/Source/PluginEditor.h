@@ -9,7 +9,8 @@ class ElevationStrip;
 class DistanceCurveEditor;
 
 class SpatialAudioEditor : public juce::AudioProcessorEditor,
-                            private juce::AudioProcessorValueTreeState::Listener
+                            private juce::AudioProcessorValueTreeState::Listener,
+                            private juce::Timer
 {
 public:
     explicit SpatialAudioEditor(SpatialAudioProcessor&);
@@ -23,6 +24,7 @@ private:
     void toggleAdvanced();
     void refreshPresetSelection();
     void parameterChanged(const juce::String& parameterID, float newValue) override;
+    void timerCallback() override;
     void layoutSliderRow(juce::Rectangle<int>& area, int rowH,
                          juce::Label& label, juce::Slider& slider);
     void layoutPairedRow(juce::Rectangle<int>& area, int rowH,
@@ -74,6 +76,9 @@ private:
 
     juce::ToggleButton stereoBypassButton_  { "Stereo bypass" };
     juce::ToggleButton aimAtListenerButton_ { "Aim at listener" };
+    juce::ToggleButton headTrackButton_     { "Head tracking" };
+    juce::TextButton   recentreButton_      { "Re-centre" };
+    juce::Label        headStatusDot_;
     juce::TextButton   resetButton_         { "Reset" };
     juce::TextButton   advancedButton_;
 
@@ -96,6 +101,7 @@ private:
     std::unique_ptr<SliderAttachment> extCharAttachment_;
     std::unique_ptr<ButtonAttachment> stereoBypassAttachment_;
     std::unique_ptr<ButtonAttachment> aimAttachment_;
+    std::unique_ptr<ButtonAttachment> headTrackAttachment_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SpatialAudioEditor)
 };

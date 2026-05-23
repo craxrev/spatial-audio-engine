@@ -245,8 +245,16 @@ class SpatialCompass : public juce::Component,
                        private juce::Timer
 {
 public:
-    explicit SpatialCompass(juce::AudioProcessorValueTreeState& s)
-        : state_(s)
+    SpatialCompass(juce::AudioProcessorValueTreeState& s,
+                   std::function<float()>               headYawDegProvider,
+                   std::function<int()>                 headStatusProvider,
+                   std::function<juce::uint64()>        headFrameIdProvider,
+                   std::function<Quat()>                headQuatProvider)
+        : state_(s),
+          headYawDeg_(std::move(headYawDegProvider)),
+          headStatus_(std::move(headStatusProvider)),
+          headFrameId_(std::move(headFrameIdProvider)),
+          headQuat_(std::move(headQuatProvider))
     {
         setMouseCursor(juce::MouseCursor::PointingHandCursor);
         setBufferedToImage(true);
@@ -286,6 +294,21 @@ public:
         const float dist  = currentDistance();
         const float az    = currentAzimuth();
         const float wHalf = currentWidth() * 0.5f;
+
+        // World-frame rotation: rotate everything painted in world coordinates
+        // by -headYaw around the (fixed) listener at centre. Sources, target,
+        // contours, arrow → all stay world-locked while the listener arrow,
+        // rings, ticks and cardinal labels stay head-relative.
+        const float headYaw = headYawDeg_ ? headYawDeg_() : 0.0f;
+        const bool  rotateWorld = std::abs(headYaw) > 1e-3f;
+        {
+        juce::Graphics::ScopedSaveState worldFrame(g);
+        if (rotateWorld)
+            // +headYaw CW: head-left turn rotates world CW relative to the
+            // fixed listener arrow, so a source at world-front (compass-up)
+            // visually slides to compass-right.
+            g.addTransform(juce::AffineTransform::rotation(
+                juce::degreesToRadians(headYaw), centre.x, centre.y));
         const auto  src   = azimDistToScreen(centre, outerR, az,         dist, kCompassMaxMeters);
         const auto  srcL  = azimDistToScreen(centre, outerR, az + wHalf, dist, kCompassMaxMeters);
         const auto  srcR  = azimDistToScreen(centre, outerR, az - wHalf, dist, kCompassMaxMeters);
@@ -438,15 +461,37 @@ public:
         };
         labelFor(srcL, "L");
         labelFor(srcR, "R");
+        }  // end world-frame block
 
         // Top-left readouts — monospace technical readout.
         g.setColour(juce::Colour(theme::phosphor3));
         g.setFont(font11());
+        const int stat = headStatus_ ? headStatus_() : 0;
+        const char* statStr = "OFF";
+        switch (stat) {
+            case 0: statStr = "DISC"; break;
+            case 1: statStr = "CONN"; break;
+            case 2: statStr = "STR";  break;
+            case 3: statStr = "FAIL"; break;
+        }
+        const juce::uint64 fid = headFrameId_ ? headFrameId_() : 0;
+        const Quat hq = headQuat_ ? headQuat_() : Quat::identity();
         const auto info = juce::String("R ") + juce::String(dist, 2) + "M  AZ "
-                        + juce::String(az, 1) + kGlyphDeg + "  YAW "
-                        + juce::String(displayedYaw_, 1) + kGlyphDeg;
+                        + juce::String(az, 1) + kGlyphDeg
+                        + "  HEAD " + juce::String(headYaw, 1) + kGlyphDeg
+                        + "  " + statStr
+                        + "  FID " + juce::String((juce::int64)fid);
         g.drawText(info, juce::Rectangle<int>(8, 8, getWidth() - 16, 14),
                    juce::Justification::topLeft);
+        const auto qline = juce::String("Q ")
+                        + juce::String(hq.w, 3) + " "
+                        + juce::String(hq.x, 3) + " "
+                        + juce::String(hq.y, 3) + " "
+                        + juce::String(hq.z, 3);
+        g.setColour(juce::Colour(theme::phosphor2));
+        g.setFont(font10());
+        g.drawText(qline, juce::Rectangle<int>(8, getHeight() - 22, getWidth() - 16, 12),
+                   juce::Justification::bottomLeft);
         g.setColour(juce::Colour(theme::phosphor2));
         g.setFont(font10());
         // Use ASCII "Cmd" — the U+2318 ⌘ glyph is missing in many fonts.
@@ -549,12 +594,13 @@ private:
             state_.getRawParameterValue("dist_b_db")     ->load(),
             state_.getRawParameterValue("dist_c")        ->load(),
         };
-        bool changed = activeDrag_ != DragTarget::None
-                    || std::abs(displayedYaw_  - prevDispYaw)  > 0.02f
-                    || std::abs(displayedOcclusion_ - prevDispOccl) > 0.001f;
-        for (int i = 0; i < 20; ++i)
-            if (snap[i] != prevSnap_[i]) { prevSnap_[i] = snap[i]; changed = true; }
-        if (changed) repaint();
+        // Always repaint while debugging head-tracking — FID/STAT/HEAD readout
+        // should refresh live regardless of conditional gates.
+        const float headYawNow = headYawDeg_ ? headYawDeg_() : 0.0f;
+        lastHeadYaw_ = headYawNow;
+        (void)prevDispYaw; (void)prevDispOccl;
+        for (int i = 0; i < 20; ++i) prevSnap_[i] = snap[i];
+        repaint();
     }
 
     juce::Point<float> centre() const
@@ -680,16 +726,22 @@ private:
 
     DragTarget hitTest(juce::Point<float> p) const
     {
-        const auto src = sourceScreen();
+        // sourceScreen()/targetScreen() return world-frame coords. Painting
+        // applies +headYaw rotation around centre; apply the same here so
+        // the click-target matches what the user sees.
+        const float yawRad = juce::degreesToRadians(headYawDeg_ ? headYawDeg_() : 0.0f);
+        const auto c = centre();
+        const float cy = std::cos(yawRad), sy = std::sin(yawRad);
+        auto rotate = [&](juce::Point<float> q) {
+            const float dx = q.x - c.x, dy = q.y - c.y;
+            return juce::Point<float>(c.x + cy * dx - sy * dy,
+                                      c.y + sy * dx + cy * dy);
+        };
+        const auto src     = rotate(sourceScreen());
+        const auto headTip = rotate(targetScreen());
 
-        // Heading handle: hit-test against the world-locked target tip.
-        const auto headTip = targetScreen();
         if (p.getDistanceFrom(headTip) <= 9.0f) return DragTarget::Heading;
-
-        // Source dot fallback (large hit box).
-        if (p.getDistanceFrom(src) <= 14.0f) return DragTarget::Source;
-
-        // Anywhere else also moves source — matches existing M5 behaviour.
+        if (p.getDistanceFrom(src)     <= 14.0f) return DragTarget::Source;
         return DragTarget::Source;
     }
 
@@ -707,6 +759,8 @@ private:
     {
         float az, dist;
         screenToAzimDist(centre(), outerRadius(), kCompassMaxMeters, p, az, dist);
+        // Screen click is in head-relative frame; world azimuth = head + yaw.
+        az = wrap180(az + (headYawDeg_ ? headYawDeg_() : 0.0f));
         if (snap)
         {
             dist = snapTo(dist, {0.0f, 1.0f, 2.0f, 5.0f, 10.0f, 15.0f, 20.0f, 25.0f});
@@ -718,14 +772,20 @@ private:
 
     void applyHeading(juce::Point<float> p, bool snap)
     {
-        // Drag writes target_(x,y) in world-locked native Cartesian.
-        // Aim-at-listener is auto-disabled if the user grabs the tip,
-        // matching the prior heading-drag UX (drag = manual control).
+        // Drag writes target_(x,y) in world-locked native Cartesian. The
+        // click position is in head-relative screen frame, so we rotate the
+        // screen-frame offset by +headYaw before mapping to native.
         const auto c = centre();
         const float pxPerM = outerRadius() / kCompassMaxMeters;
         if (pxPerM < 1e-3f) return;
-        float ty = -(p.x - c.x) / pxPerM;
-        float tx = -(p.y - c.y) / pxPerM;
+        // Screen-frame native offset (matches the no-rotation mapping below).
+        float ty_screen = -(p.x - c.x) / pxPerM;
+        float tx_screen = -(p.y - c.y) / pxPerM;
+        // Rotate by +headYaw to get the world native vector.
+        const float yawRad = juce::degreesToRadians(headYawDeg_ ? headYawDeg_() : 0.0f);
+        const float cy = std::cos(yawRad), sy = std::sin(yawRad);
+        float tx =  cy * tx_screen - sy * ty_screen;
+        float ty =  sy * tx_screen + cy * ty_screen;
         if (snap)
         {
             // Snap to integer-metre grid for tidy positioning.
@@ -868,9 +928,14 @@ private:
     }
 
     juce::AudioProcessorValueTreeState& state_;
+    std::function<float()>              headYawDeg_;
+    std::function<int()>                headStatus_;
+    std::function<juce::uint64()>       headFrameId_;
+    std::function<Quat()>               headQuat_;
     DragTarget activeDrag_ = DragTarget::None;
     float displayedYaw_       = 0.0f;
     float displayedOcclusion_ = 0.0f;
+    float lastHeadYaw_        = 0.0f;
     bool  firstTick_          = true;
     juce::Image backgroundImage_;
     float prevSnap_[20] = {
@@ -1419,7 +1484,11 @@ const char* const kDistParamIds[7] = {
 SpatialAudioEditor::SpatialAudioEditor(SpatialAudioProcessor& p)
     : AudioProcessorEditor(p), proc_(p)
 {
-    compass_     = std::make_unique<SpatialCompass>(p.apvts);
+    compass_     = std::make_unique<SpatialCompass>(p.apvts,
+        [&p] { return p.getEffectiveYawDeg(); },
+        [&p] { return (int)p.getHeadTrackerStatus(); },
+        [&p] { return p.getHeadTrackerFrameId(); },
+        [&p] { return p.getEffectiveQuat(); });
     elevation_   = std::make_unique<ElevationStrip>(p.apvts);
     curveEditor_ = std::make_unique<DistanceCurveEditor>(p.apvts);
     addAndMakeVisible(*compass_);
@@ -1608,13 +1677,69 @@ SpatialAudioEditor::SpatialAudioEditor(SpatialAudioProcessor& p)
     resetButton_.onClick = [this] { resetAllParams(); };
     addAndMakeVisible(resetButton_);
 
+    // Head tracking row (bottom-left).
+    headTrackButton_.setTooltip("Drive listener rotation from Galaxy Buds 2 Pro head motion.");
+    headTrackButton_.setColour(juce::ToggleButton::textColourId,        juce::Colour(theme::textBright));
+    headTrackButton_.setColour(juce::ToggleButton::tickColourId,        juce::Colour(theme::src));
+    headTrackButton_.setColour(juce::ToggleButton::tickDisabledColourId,juce::Colour(theme::gridStrong));
+    addAndMakeVisible(headTrackButton_);
+    headTrackAttachment_ = std::make_unique<ButtonAttachment>(
+        p.apvts, "head_tracking_enabled", headTrackButton_);
+
+    recentreButton_.setTooltip("Capture current head pose as 'looking forward'.");
+    recentreButton_.setColour(juce::TextButton::buttonColourId,   juce::Colour(theme::bg2));
+    recentreButton_.setColour(juce::TextButton::buttonOnColourId, juce::Colour(theme::gridStrong));
+    recentreButton_.setColour(juce::TextButton::textColourOffId,  juce::Colour(theme::textBright));
+    recentreButton_.setColour(juce::TextButton::textColourOnId,   juce::Colour(theme::textBright));
+    recentreButton_.onClick = [this] { proc_.recentreHeadTracker(); };
+    addAndMakeVisible(recentreButton_);
+
+    headStatusDot_.setText(juce::String::charToString(0x25CF), juce::dontSendNotification);  // ●
+    headStatusDot_.setJustificationType(juce::Justification::centred);
+    headStatusDot_.setColour(juce::Label::textColourId, juce::Colour(theme::phosphor0));
+    headStatusDot_.setTooltip("Off");
+    addAndMakeVisible(headStatusDot_);
+
+    startTimerHz(5);
+
     setSize(580, 784);
 }
 
 SpatialAudioEditor::~SpatialAudioEditor()
 {
+    stopTimer();
     for (auto* id : kDistParamIds)
         proc_.apvts.removeParameterListener(id, this);
+}
+
+void SpatialAudioEditor::timerCallback()
+{
+    using S = HeadTracker::Status;
+    const auto status = proc_.getHeadTrackerStatus();
+    const bool enabled = headTrackButton_.getToggleState();
+    const bool referenced = proc_.isHeadPoseReferenced();
+
+    juce::uint32 col = theme::phosphor0;
+    const char*  tip = "Off";
+    if (enabled)
+    {
+        switch (status)
+        {
+            case S::Disconnected: col = theme::phosphor1; tip = "Searching for buds…"; break;
+            case S::Connecting:   col = theme::phosphor2; tip = "Connecting…"; break;
+            case S::Failed:       col = theme::phosphor1; tip = "Could not connect — buds paired & powered?"; break;
+            case S::Streaming:
+                col = referenced ? theme::phosphor4 : theme::phosphor3;
+                tip = referenced ? "Streaming (calibrated)"
+                                 : "Streaming — press Re-centre to set forward";
+                break;
+        }
+    }
+    headStatusDot_.setColour(juce::Label::textColourId, juce::Colour(col));
+    headStatusDot_.setTooltip(tip);
+
+    // Disable Re-centre when there's no live pose to capture.
+    recentreButton_.setEnabled(enabled && status == S::Streaming);
 }
 
 void SpatialAudioEditor::refreshPresetSelection()
@@ -1724,6 +1849,11 @@ void SpatialAudioEditor::resized()
     resetButton_.setBounds(bottom.removeFromRight(72));
     bottom.removeFromRight(6);
     advancedButton_.setBounds(bottom.removeFromRight(110));
+    bottom.removeFromRight(12);
+    headStatusDot_.setBounds(bottom.removeFromLeft(16));
+    headTrackButton_.setBounds(bottom.removeFromLeft(120));
+    bottom.removeFromLeft(4);
+    recentreButton_.setBounds(bottom.removeFromLeft(80));
 
     // ---- Top: compass + elev strip (square-ish canvas) ----
     auto canvas = area.removeFromTop(340);

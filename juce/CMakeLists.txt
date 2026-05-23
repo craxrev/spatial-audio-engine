@@ -84,6 +84,10 @@ target_sources(SpatialAudioEngine PRIVATE
     Source/PluginProcessor.h
     Source/PluginEditor.cpp
     Source/PluginEditor.h
+    Source/HeadTracker.h
+    Source/HeadPoseProcessor.h
+    Source/Trackers/OscHeadTracker.h
+    Source/Trackers/OscHeadTracker.cpp
 )
 
 target_compile_definitions(SpatialAudioEngine PRIVATE
@@ -98,6 +102,7 @@ target_link_libraries(SpatialAudioEngine PRIVATE
     juce::juce_audio_utils
     juce::juce_dsp
     juce::juce_audio_plugin_client
+    juce::juce_osc
     juce::juce_recommended_config_flags
     juce::juce_recommended_lto_flags
     juce::juce_recommended_warning_flags
