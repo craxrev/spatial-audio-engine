@@ -108,7 +108,12 @@ offset 8    : uint8                 GrvBoolean (validity flag; 0 = valid in code
 
 **Component order in `GrvFloatArray`: indices 0,1,2,3 — but Samsung does not document which slot is x/y/z/w.** The C# code stuffs them into `Quaternion(x, y, z, w)` constructor in order (`SpatialSensorManager.cs:63`), but `System.Numerics.Quaternion(x,y,z,w)` is `(x, y, z, w)`, so by convention the wire layout is `[x, y, z, w]` little-endian int16, each ÷ 10000. **VERIFY EMPIRICALLY** by parking the buds level and reading values; should be approx `(0, 0, 0, 1)` ± gravity-induced small components.
 
-Sample rate: not specified in the source. Empirically ~50–100 Hz expected (matches similar Samsung IMU streams). Measure when implementing.
+Sample rate is **motion-gated**: ~50 Hz under continuous head motion, ~14 Hz when stationary
+(measured 2026-05-23 over 60-s windows). A2DP audio playing through the buds did NOT affect
+the rate. The firmware appears event-driven — it emits GRV frames when orientation changes,
+throttles when still. 50 Hz under motion is the firmware ceiling; no host-side command to
+raise it exists in Samsung's own first-party plugin (`com.samsung.accessory.atticmgr` ships
+with only Attach/Detach/Alive/RequestWear in `SppMsgID.java`).
 
 Frame convention (the bud's quaternion):
 - Unknown a priori. Native needs `+X forward, +Y left, +Z up`. Buds frame is most likely `+X right, +Y forward, +Z up` (typical Android sensor convention) or a remap thereof.
@@ -162,6 +167,5 @@ Frame convention (the bud's quaternion):
 - Header bit positions for `Type`/`IsFragment`: encoder uses `0x10`/`0x20`, decoder uses `0x1000`/`0x2000`. Looks like a bug or a deliberate asymmetry. Capture an outbound frame on the wire and confirm.
 - Exact quaternion component order (`xyzw` vs `wxyz`).
 - Bud-frame axis convention (need calibration step).
-- Sample rate (~50 Hz? ~100 Hz?). Affects whether smoothing is needed.
 - Whether keep-alive can be slower than 2 s. Lower rate → fewer wakeups.
 - Behavior when only one bud is worn (BudGrv is from "BudGrv" — single-source; presumably whichever is primary).
