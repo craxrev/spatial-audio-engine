@@ -3,7 +3,10 @@
 // audio handshake, prints inbound BudGrv quaternion frames + stats.
 //
 // Build: ./build.sh
-// Run:   ./buds_sniffer [seconds]   (default 30)
+// Run:   ./buds_sniffer [seconds]                (default 30, free-form)
+//        ./buds_sniffer protocol                 (guided calibration)
+//        ./buds_sniffer probe <byte> [seconds]   (inject a CONTROL byte at midpoint;
+//                                                 reports baseline vs post-probe rate)
 
 #import <Foundation/Foundation.h>
 #import <IOBluetooth/IOBluetooth.h>
@@ -107,6 +110,11 @@ static std::atomic<bool> g_quit{false};
 static std::atomic<bool> g_attached{false};
 static std::atomic<uint64_t> g_grvCount{0};
 static std::atomic<int64_t>  g_firstGrvMs{-1};
+static std::atomic<int64_t>  g_probeFiredMs{-1};
+static std::atomic<uint64_t> g_grvCountPre{0};
+static std::atomic<uint64_t> g_grvCountPost{0};
+static std::atomic<int64_t>  g_firstPostMs{-1};
+static std::atomic<int64_t>  g_lastGrvMs{-1};
 
 static IOBluetoothRFCOMMChannel* g_channel = nil;
 static std::vector<uint8_t> g_rxBuf;
@@ -163,7 +171,10 @@ static void parseFrame(const uint8_t* frame, size_t total) {
             const char* name = "?";
             if (result == CTRL_ATTACH_SUCCESS) { name = "AttachSuccess"; g_attached = true; }
             else if (result == CTRL_DETACH_SUCCESS) { name = "DetachSuccess"; g_attached = false; }
-            printf("[ctrl] %s (%u)  hdrBits[type=%d frag=%d]\n", name, result, typeBit, isFragment);
+            printf("[ctrl] %s (%u)  hdrBits[type=%d frag=%d]  payloadLen=%d",
+                   name, result, typeBit, isFragment, payloadLen);
+            if (payloadLen > 1) { printf("  extra="); dumpHex(&payload[1], payloadLen - 1); }
+            printf("\n");
             break;
         }
         case MSG_SPATIAL_AUDIO_DATA: {
@@ -184,6 +195,14 @@ static void parseFrame(const uint8_t* frame, size_t total) {
                     int64_t t = nowMs();
                     int64_t first = g_firstGrvMs.load();
                     if (first < 0) g_firstGrvMs = t;
+                    g_lastGrvMs = t;
+                    int64_t fired = g_probeFiredMs.load();
+                    if (fired < 0) {
+                        ++g_grvCountPre;
+                    } else {
+                        if (g_firstPostMs.load() < 0) g_firstPostMs = t;
+                        ++g_grvCountPost;
+                    }
                     if (g_logFile) {
                         fprintf(g_logFile, "GRV %s %lld %d %d %d %d %u\n",
                                 g_phase.load(), (long long)t, raw[0], raw[1], raw[2], raw[3], valid);
@@ -378,15 +397,31 @@ static IOBluetoothDevice* findBudsDevice() {
 int main(int argc, char** argv) {
     @autoreleasepool {
         bool protocolMode = (argc >= 2 && strcmp(argv[1], "protocol") == 0);
+        int probeByte = -1;          // -1 = no probe
         int seconds = 30;
-        if (!protocolMode && argc >= 2) {
-            seconds = atoi(argv[1]);
-            if (seconds <= 0) seconds = 30;
+        if (!protocolMode) {
+            // Parse:  [seconds]  |  probe <byte> [seconds]
+            int i = 1;
+            if (i < argc && strcmp(argv[i], "probe") == 0) {
+                if (i + 1 >= argc) { fprintf(stderr, "usage: buds_sniffer probe <byte> [seconds]\n"); return 1; }
+                probeByte = atoi(argv[i + 1]);
+                if (probeByte < 0 || probeByte > 255) { fprintf(stderr, "probe byte must be 0..255\n"); return 1; }
+                i += 2;
+            }
+            if (i < argc) {
+                seconds = atoi(argv[i]);
+                if (seconds <= 0) seconds = 30;
+            }
         }
         if (protocolMode) {
             printf("buds_sniffer — protocol mode (guided). Ctrl-C to abort.\n");
+        } else if (probeByte >= 0) {
+            printf("buds_sniffer — probe byte %d, duration %d s "
+                   "(baseline %ds + post-probe %ds). Ctrl-C to stop early.\n",
+                   probeByte, seconds, seconds / 2, seconds - seconds / 2);
         } else {
-            printf("buds_sniffer — duration %d s. Ctrl-C to stop early. (run with 'protocol' for guided mode)\n", seconds);
+            printf("buds_sniffer — duration %d s. Ctrl-C to stop early. "
+                   "(run with 'protocol' or 'probe <byte>')\n", seconds);
         }
 
         signal(SIGINT, handleSigint);
@@ -442,6 +477,21 @@ int main(int argc, char** argv) {
 
         if (protocolMode) {
             runProtocol();
+        } else if (probeByte >= 0) {
+            int64_t start = nowMs();
+            int64_t mid = start + (int64_t)(seconds / 2) * 1000;
+            int64_t end = start + (int64_t)seconds * 1000;
+            bool probed = false;
+            while (!g_quit.load() && nowMs() < end) {
+                pumpOnce();
+                if (!probed && nowMs() >= mid) {
+                    printf("\n[probe] sending CONTROL byte %d  (t=%lldms)\n",
+                           probeByte, (long long)(nowMs() - start));
+                    send(MSG_SPATIAL_AUDIO_CONTROL, (uint8_t)probeByte);
+                    g_probeFiredMs = nowMs();
+                    probed = true;
+                }
+            }
         } else {
             int64_t start = nowMs();
             while (!g_quit.load() && (nowMs() - start) < (int64_t)seconds * 1000) {
@@ -463,11 +513,33 @@ int main(int argc, char** argv) {
         // Stats.
         uint64_t n = g_grvCount.load();
         int64_t first = g_firstGrvMs.load();
-        int64_t last = nowMs();
+        int64_t lastGrv = g_lastGrvMs.load();
         double rate = 0.0;
-        if (n > 1 && first > 0) rate = (double)(n - 1) * 1000.0 / (double)(last - first);
+        if (n > 1 && first > 0 && lastGrv > first) {
+            rate = (double)(n - 1) * 1000.0 / (double)(lastGrv - first);
+        }
         printf("\n[summary] BudGrv frames: %llu  est-rate: %.1f Hz\n",
                (unsigned long long)n, rate);
+
+        int64_t fired = g_probeFiredMs.load();
+        if (fired > 0) {
+            uint64_t nPre  = g_grvCountPre.load();
+            uint64_t nPost = g_grvCountPost.load();
+            int64_t fPost  = g_firstPostMs.load();
+            double rPre = 0.0, rPost = 0.0;
+            if (nPre > 1 && first > 0 && fired > first) {
+                rPre = (double)(nPre - 1) * 1000.0 / (double)(fired - first);
+            }
+            if (nPost > 1 && fPost > 0 && lastGrv > fPost) {
+                rPost = (double)(nPost - 1) * 1000.0 / (double)(lastGrv - fPost);
+            }
+            printf("[probe]   baseline: %llu frames  %.1f Hz   "
+                   "post-probe: %llu frames  %.1f Hz   "
+                   "delta: %+.1f Hz\n",
+                   (unsigned long long)nPre, rPre,
+                   (unsigned long long)nPost, rPost,
+                   rPost - rPre);
+        }
     }
     return 0;
 }
