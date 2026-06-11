@@ -1,57 +1,141 @@
-# spatial-audio-engine
+# Spatial Audio Engine
 
-Clean-room implementation of a 3D-spatial / binaural audio engine
-(ambisonic-based with HRTF decode, FDN reverb, externalizer, optional
-multichannel bed bus, etc.). Suitable for Web Audio AudioWorklet,
-native real-time audio, or any host that can run a 128-sample block
-loop at the audio sample rate.
+Rust spatial-audio engine with a JUCE Audio Unit front-end, based on an existing spatial rendering design.
 
-## Contents
+<img src="juce/docs/images/plugin-ui.png" width="420" alt="Spatial Audio Engine AU plugin UI">
 
-- **`design notes`** — the canonical, stack-agnostic build spec.
-  Read this first. ~2000 lines, 17 sections. Self-contained: every
-  algorithm and constant the engine needs is in here.
-- **`data/`** — bundled HRTF coefficients (or design your own per §14):
-  - `hrtf_decoder_native.bin` — 16 KB main ambisonic → binaural decoder
-  - `hrtf_post_filter_a.bin` / `hrtf_post_filter_b.bin` — W-channel
-    binauralizer pair (v0.5 default)
-  - `hrtf_post_legacy_v04.bin` — optional v0.4 cross-channel
-    post-coloration (only used if you implement §17)
-- **`agent notes`** — agent scope and guidance.
 
-## Getting started
+Current repo focus:
+- `crates/engine`: realtime binaural rendering engine
+- `juce/`: macOS AU + standalone app wrapper
 
-```
-1. Read design notes §1-§2 for the high-level shape.
-2. Pick a language + audio host.
-3. Implement per the spec, bottom-up (§5 → §6 → §7 → §8 → §9 → §12).
-4. Cross-check against a test scene.
-```
+## Features
 
-§17 (legacy v0.4 post-decoder) is optional. The default implementation
-target is v0.5; §17 adds backward compatibility for v0.4-era
-applications.
+- Fixed 128-sample realtime processing core
+- Binaural decode with bundled HRTF assets
+- Per-source position, gain, orientation, occlusion, and directivity
+- Reverb and externalizer stages
+- Stereo-width control and world/head-locked behavior
+- Distance-curve editing in the plugin UI
+- OSC-driven head tracking support in the JUCE plugin
+- Rust API plus optional C ABI (`--features c-api`)
 
-## Build
+## Repo Layout
 
-```
-cargo build --workspace
+- `crates/engine` - core DSP engine
+- `crates/engine/include/engine.h` - C header for the engine staticlib
+- `juce` - AU/Standalone wrapper built with JUCE
+- `data` - HRTF/filter assets used by the current build
+- `crates/cli` - placeholder for an offline renderer
+- `crates/cpal-demo` - placeholder for a native realtime demo
+- `crates/vst` - placeholder crate; no active plugin implementation here
+
+## Requirements
+
+- Rust toolchain
+- CMake 3.22+
+- Ninja
+- Xcode command line tools
+- macOS 11+
+
+## Build And Test
+
+Run engine tests:
+
+```bash
 cargo test --workspace
 ```
 
-Workspace crates:
+Build the JUCE plugin from the canonical build dir:
 
-- `engine` — pure DSP library (no I/O, no plugin SDK, no host code).
-- `vst` — per-track VST3 / CLAP / standalone adapter via `nih-plug`
-  (wired in at M5).
-- `cli` — offline WAV renderer (M16).
-- `cpal-demo` — native real-time demo (post-spec consumer).
+```bash
+cmake -S juce -B juce/build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build juce/build --config Release
+```
 
-See `development notes` for the phased build plan.
+Build output:
 
-## License of bundled data
+```text
+juce/build/SpatialAudioEngine_artefacts/Release/AU/Spatial Audio Engine.component
+```
 
-The HRTF coefficient files in `data/` are extracted from a third-party
-third-party engine. They are bundled here for reference and
-reproducibility. If you ship a product, supply your own HRTF
-coefficients (see §14 of the spec for procedure).
+The JUCE target is configured with `COPY_PLUGIN_AFTER_BUILD`, so a successful build also installs the AU to:
+
+```text
+~/Library/Audio/Plug-Ins/Components/Spatial Audio Engine.component
+```
+
+## Engine Build Only
+
+Build the Rust engine staticlib and C ABI:
+
+```bash
+cargo build --release -p engine --features c-api
+```
+
+Header:
+
+```text
+crates/engine/include/engine.h
+```
+
+Static library:
+
+```text
+target/release/libengine.a
+```
+
+## Head Tracking
+
+The JUCE plugin listens for OSC head-pose updates on UDP port `9000`.
+Expected message:
+
+```text
+/headpose  w x y z
+```
+
+where `w x y z` is a quaternion in scalar-first order.
+
+Two ways to drive it:
+
+1. Send `/headpose` OSC messages from your own tracker source.
+2. Use the included Buds bridge in `juce/tools/buds_daemon`.
+
+Build the Buds bridge:
+
+```bash
+./juce/tools/buds_daemon/build.sh
+```
+
+Run it:
+
+```bash
+./juce/tools/buds_daemon/buds_daemon
+```
+
+Notes:
+
+- Default destination is `127.0.0.1:9000`.
+- The daemon looks for paired Buds devices and forwards motion as OSC.
+- If another app already owns the RFCOMM connection, the daemon may fail to attach.
+- In the plugin UI, enable head tracking and use the re-centre control to zero the current pose.
+- Protocol notes and packet details: [headtracking protocol notes](juce/docs/headtracking_protocol.md)
+
+## Current Status
+
+- Engine tests are in place and passing
+- AU build/install flow is working from `juce/build`
+- AU is currently the main supported host target
+- `cli`, `cpal-demo`, and `vst` are not finished products yet
+- The current build uses bundled HRTF/filter assets while replacement data is being evaluated
+
+## Notes
+
+- The engine processes audio in 128-sample blocks; the JUCE wrapper handles host block adaptation.
+- The current plugin build expects the HRTF/filter files in `data/` to be present.
+
+## License
+
+Unless otherwise noted, the source code in this repository is licensed under MIT.
+
+Binary asset files under `data/` are not covered by the code license in this repository.
